@@ -1,0 +1,15 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: order-worker
+  namespace: orders
+spec:
+  template:
+    spec:
+      nodeSelector:
+        agentpool: workerspot
+      tolerations:
+        - key: kubernetes.azure.com/scalesetpriority
+          operator: Equal
+          value: spot
+          effect: NoSchedule

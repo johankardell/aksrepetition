@@ -1,0 +1,13 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: order-worker
+  namespace: orders
+spec:
+  template:
+    spec:
+      containers:
+        - name: worker
+          env:
+            - name: PROCESSING_DELAY_SECONDS
+              value: "2"

@@ -1,0 +1,21 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: order-api
+  namespace: orders
+spec:
+  template:
+    spec:
+      containers:
+        - name: api
+          volumeMounts:
+            - name: config
+              mountPath: /mnt/secrets-store
+              readOnly: true
+      volumes:
+        - name: config
+          csi:
+            driver: secrets-store.csi.k8s.io
+            readOnly: true
+            volumeAttributes:
+              secretProviderClass: lab-config

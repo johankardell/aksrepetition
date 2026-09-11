@@ -1,0 +1,40 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: bounded-capacity
+  namespace: orders
+spec:
+  parallelism: 12
+  completions: 12
+  activeDeadlineSeconds: 600
+  backoffLimit: 0
+  ttlSecondsAfterFinished: 300
+  template:
+    metadata:
+      labels:
+        app: bounded-capacity
+    spec:
+      restartPolicy: Never
+      nodeSelector:
+        agentpool: apps
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: reserve
+          image: __IMAGE_REFERENCE__
+          command: [python, -c, "import time; time.sleep(300)"]
+          resources:
+            requests:
+              cpu: "1"
+              memory: 128Mi
+            limits:
+              cpu: "1"
+              memory: 128Mi
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]

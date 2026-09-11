@@ -1,0 +1,14 @@
+local.settings*.json
+rendered/
+.venv/
+__pycache__/
+*.pyc
+*.pem
+*.key
+*.pfx
+*.crt
+*.kubeconfig
+*.parameters.local.json
+.artifacts/
+evidence/
+

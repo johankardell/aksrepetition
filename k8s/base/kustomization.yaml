@@ -1,0 +1,20 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+resources:
+  - namespace.yaml
+  - serviceaccounts.yaml
+  - api.yaml
+  - worker.yaml
+configMapGenerator:
+  - name: orders-config
+    namespace: orders
+    literals:
+      - SERVICEBUS_NAMESPACE=__SERVICEBUS_NAMESPACE__
+      - QUEUE_NAME=orders
+generatorOptions:
+  disableNameSuffixHash: true
+images:
+  - name: order-app
+    newName: __REGISTRY__/order-app
+    newTag: __IMAGE_TAG__
+

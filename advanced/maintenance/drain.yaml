@@ -1,0 +1,45 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: maintenance-lab
+  labels:
+    pod-security.kubernetes.io/enforce: restricted
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: drain-guard
+  namespace: maintenance-lab
+spec:
+  replicas: 1
+  selector:
+    matchLabels: {app: drain-guard}
+  template:
+    metadata:
+      labels: {app: drain-guard}
+    spec:
+      nodeSelector: {agentpool: apps}
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        seccompProfile: {type: RuntimeDefault}
+      containers:
+        - name: guard
+          image: mcr.microsoft.com/azurelinux/base/core:3.0
+          command: ["/bin/sh", "-c", "sleep infinity"]
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities: {drop: [ALL]}
+          resources:
+            requests: {cpu: 100m, memory: 64Mi}
+            limits: {cpu: 200m, memory: 128Mi}
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: drain-guard
+  namespace: maintenance-lab
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels: {app: drain-guard}

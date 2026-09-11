@@ -1,0 +1,36 @@
+apiVersion: keda.sh/v1alpha1
+kind: TriggerAuthentication
+metadata:
+  name: servicebus-workload
+  namespace: orders
+spec:
+  podIdentity:
+    provider: azure-workload
+    identityId: __SCALER_CLIENT_ID__
+---
+apiVersion: keda.sh/v1alpha1
+kind: ScaledObject
+metadata:
+  name: order-worker
+  namespace: orders
+spec:
+  scaleTargetRef:
+    name: order-worker
+  pollingInterval: 15
+  cooldownPeriod: 120
+  minReplicaCount: 0
+  maxReplicaCount: 5
+  advanced:
+    horizontalPodAutoscalerConfig:
+      behavior:
+        scaleDown:
+          stabilizationWindowSeconds: 120
+  triggers:
+    - type: azure-servicebus
+      metadata:
+        namespace: __SERVICEBUS_NAME__
+        queueName: orders
+        messageCount: "10"
+        activationMessageCount: "0"
+      authenticationRef:
+        name: servicebus-workload

@@ -1,0 +1,13 @@
+{
+  "stages": [
+    {
+      "name": "passive-canary",
+      "groups": [{"name": "secondary"}],
+      "afterStageWaitInSeconds": 600
+    },
+    {
+      "name": "active-region",
+      "groups": [{"name": "primary"}]
+    }
+  ]
+}

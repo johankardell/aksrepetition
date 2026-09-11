@@ -1,0 +1,41 @@
+apiVersion: azmonitoring.coreos.com/v1
+kind: PodMonitor
+metadata:
+  name: order-api
+  namespace: orders
+spec:
+  labelLimit: 63
+  labelNameLengthLimit: 511
+  labelValueLengthLimit: 1023
+  selector:
+    matchLabels:
+      app: order-api
+  namespaceSelector:
+    matchNames: [orders]
+  podMetricsEndpoints:
+    - port: http
+      path: /metrics
+      interval: 30s
+      metricRelabelings:
+        - sourceLabels: [__name__]
+          regex: "orders_http_.*|process_cpu_seconds_total|process_resident_memory_bytes"
+          action: keep
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: monitor-to-api
+  namespace: orders
+spec:
+  podSelector:
+    matchLabels:
+      app: order-api
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kube-system
+      ports:
+        - protocol: TCP
+          port: 8080

@@ -1,0 +1,58 @@
+name: Publish private order image
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths: ["app/**", ".github/workflows/publish-image.yml"]
+permissions:
+  contents: read
+  id-token: write
+concurrency:
+  group: publish-order-image
+  cancel-in-progress: false
+jobs:
+  publish:
+    # This is a real, operator-provisioned, VNet-connected Linux runner, not a hosted label.
+    runs-on: [self-hosted, Linux, X64, aks-private]
+    environment: acr-publish
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6, reviewed 2026-09-10
+        with:
+          persist-credentials: false
+      - uses: azure/login@935127ca5bb3c4b02c9c2c10060028383878f33f # v3, reviewed 2026-09-10
+        with:
+          client-id: ${{ vars.AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+      - name: Build once and publish immutable evidence
+        shell: pwsh
+        env:
+          ACR_NAME: ${{ vars.ACR_NAME }}
+          REGISTRY: ${{ vars.REGISTRY_SERVER }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $PSNativeCommandUseErrorActionPreference = $true
+          az acr login --name $env:ACR_NAME
+          docker buildx build --pull --platform linux/amd64 --provenance=true --sbom=true `
+            --file app/Dockerfile --tag "$env:REGISTRY/order-app:$env:GITHUB_SHA" `
+            --metadata-file image-metadata.json --push app
+          $digest = (Get-Content image-metadata.json -Raw | ConvertFrom-Json).'containerimage.digest'
+          if ($digest -notmatch '^sha256:[a-f0-9]{64}$') { throw 'Missing immutable digest' }
+          "$env:REGISTRY/order-app@$digest" | Set-Content image-reference.txt
+          "Published ``$env:REGISTRY/order-app@$digest``" >> $env:GITHUB_STEP_SUMMARY
+      - uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6, reviewed 2026-09-10
+        with:
+          name: order-image-${{ github.sha }}
+          path: |
+            image-reference.txt
+            image-metadata.json
+          retention-days: 7
+      - name: Remove cached registry and Azure credentials
+        if: always()
+        shell: pwsh
+        env:
+          REGISTRY: ${{ vars.REGISTRY_SERVER }}
+        run: |
+          docker logout $env:REGISTRY
+          az logout
