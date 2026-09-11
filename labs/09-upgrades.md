@@ -6,6 +6,11 @@ Prerequisites: labs 1–8, last successful backup and PostgreSQL restore test, s
 
 ## 1. Build a specific go/no-go record
 
+**Task:** choose a currently advertised GA upgrade target and document compatibility, capacity, recovery readiness and blockers before authorizing the change. If no supported target exists, defer the version-upgrade portion; do not manufacture one by downgrading or selecting an unsupported release.
+
+<details>
+<summary>Solution</summary>
+
 ```powershell
 . .\scripts\Use-Lab.ps1
 $ErrorActionPreference = 'Stop'
@@ -46,7 +51,16 @@ az aks nodepool get-upgrades -g $Lab.ResourceGroup --cluster-name $Lab.ClusterNa
 
 No-go conditions: failing admission webhooks, Pending production pods, zero allowed disruptions without a scaling plan, unsupported extension, no surge quota, backup not verified, ongoing Fleet/autoupgrade, or an unbounded consumer backlog. Fix those first.
 
+Use a dated decision record with current/target versions, the advertised upgrade entry, client skew, each add-on's supported target, deprecated API findings, per-pool surge capacity, PDB readiness, last successful restore evidence, queue baseline, change owner and abort criteria. Approve only when every required item has evidence. For example, a target being advertised with an unverified Backup extension is **no-go**, not partial approval; record the compatibility owner and defer execution. Actual versions and outcomes must come from your subscription.
+
+</details>
+
 ## 2. Separate maintenance schedules from execution ownership
+
+**Task:** record existing channels, establish noncompeting maintenance ownership, and configure bounded per-pool surge/drain settings. Execute manual changes only in the approved window; a maintenance schedule does not postpone a manual command or guarantee capacity.
+
+<details>
+<summary>Solution</summary>
 
 Record existing upgrade channels; disable only automatic Kubernetes scheduling for this manual exercise, and retain a node OS channel:
 
@@ -74,9 +88,16 @@ Configure bounded surge and drain timeouts on both managed pools:
 
 Inspect actual pool names and substitute if foundation used a different system-pool name. One extra node **per updating pool**, SKU availability, zone capacity, pod scheduling constraints and IP planning all affect feasibility. Do not use `--force` to bypass failed upgrade validations.
 
+</details>
+
 ## 3. Deliberately block a real eviction without touching the orders PDB
 
 The standalone `maintenance-lab` namespace is explicitly incident-owned, not selected by a Flux Kustomization. Its single-replica deployment with `minAvailable: 1` is guaranteed to block voluntary eviction once Ready.
+
+**Task:** demonstrate a real PDB-blocked drain and repair it by restoring spare capacity. Limit evictions to the incident workload, always uncordon the recorded node, and do not bypass the eviction API or remove the PDB.
+
+<details>
+<summary>Solution</summary>
 
 ```powershell
 kubectl apply -f .\advanced\maintenance\drain.yaml
@@ -110,7 +131,14 @@ kubectl delete namespace maintenance-lab
 
 Expected at least one allowed disruption and successful eviction. If the second pod cannot schedule, fix capacity/taints/selectors first. `--disable-eviction`, deleting the PDB and force-deleting pods are not acceptable fixes. PDBs constrain **voluntary** evictions; they do not prevent node/zone failure.
 
+</details>
+
 ## 4. Run traffic and perform a supported upgrade
+
+**Task:** measure readiness and durable order processing during an approved control-plane-first, pool-by-pool upgrade. Require healthy workloads and business processing before each next pool; stop on an SLO breach. Do not use forced validation bypasses or attempt Kubernetes downgrade.
+
+<details>
+<summary>Solution</summary>
 
 Use two PowerShell terminals on the management host. In terminal A:
 
@@ -122,6 +150,8 @@ $AppUrl = Read-Host 'Lab 3 HTTPS application base URL'
 The helper measures readiness HTTP status and latency once per second. It is **not** a full order SLI. In addition, create a synthetic order immediately before and after each operation and check GET plus worker/database evidence as in lab 8. Record retry outcomes separately; retrying should not hide failed requests in the SLI. Agree the lab objective first, for example ≥99% successful probes and no loss of accepted test orders; use the customer's actual SLO for a real change.
 
 In terminal B, save your target and start the supported control-plane upgrade, then node pools one at a time:
+
+Use the existing session from tasks 1–3 as terminal B so `$Target`, `$Lab` and the Flux names are defined. In a fresh terminal, load `Use-Lab.ps1` and repeat target discovery/validation rather than guessing or relying on variables from terminal A. Execute the following operations individually, applying the health gate between them.
 
 ```powershell
 $ChangeStart = [DateTime]::UtcNow
@@ -140,7 +170,14 @@ Do not leave skewed versions indefinitely. AKS advertises and enforces its suppo
 
 Before moving to the next pool, require healthy system pods, ready production replicas and successful order processing. Stop on SLO breach and follow section 6; do not mistake a sequential command list for an approval system.
 
+</details>
+
 ## 5. Exercise node-image maintenance separately and validate
+
+**Task:** compare node image IDs before/after image-only maintenance, calculate observed readiness availability separately from order outcomes, and update authoritative version/PSA configuration. Report a no-op honestly; do not replay the original bootstrap over the progressed cluster.
+
+<details>
+<summary>Solution</summary>
 
 ```powershell
 az aks nodepool list -g $Lab.ResourceGroup --cluster-name $Lab.ClusterName `
@@ -164,14 +201,32 @@ When terminal A finishes:
 
 ```powershell
 $Samples = Get-Content .\.artifacts\advanced\upgrade-traffic.json -Raw | ConvertFrom-Json
+if (@($Samples).Count -eq 0) { throw 'No traffic samples were recorded; availability cannot be calculated.' }
 $Failed = @($Samples | Where-Object status -NE 200)
-[pscustomobject]@{Samples=$Samples.Count;Failed=$Failed.Count;Start=$ChangeStart;End=[DateTime]::UtcNow}
+[pscustomobject]@{
+  Samples = @($Samples).Count
+  Failed = $Failed.Count
+  AvailabilityPercent = [Math]::Round(100.0 * (@($Samples).Count - $Failed.Count) / @($Samples).Count, 3)
+  Start = $ChangeStart
+  End = [DateTime]::UtcNow
+}
 $Failed | Format-Table
 ```
 
 Correlate failed/slow samples with node drain timestamps, ingress endpoints, order retries and queue age. Report readiness and order SLI separately. Investigate all missing IDs against PostgreSQL and Service Bus active/dead-letter counts.
 
+For example, 10 failed observations out of 1,000 means 99% sampled readiness availability; it says nothing by itself about the durability of accepted orders. This is an illustrative calculation, not a measured lab result. Pair the actual sample count and time range with accepted/processed/missing order IDs, latency and retries, and compare against the objective agreed before the change.
+
+Persist the chosen `KubernetesVersion` in local deployment settings without committing those settings. In the owned infrastructure definition, retain the current post-lab networking/add-ons as well as `maxSurge`, `drainTimeoutInMinutes` and `nodeSoakDurationInMinutes`; do not use the old foundation as a rollback. Update all three pinned PSA version labels in `advanced\governance\teams.yaml` to the tested target minor using lab 7's reviewed Git workflow, then reconcile `teams` and record its applied SHA.
+
+</details>
+
 ## 6. Practice application rollback; choose cluster recovery honestly
+
+**Task:** roll back a reviewed, schema-compatible application-only release through Git and re-promote the known-good release for lab 10. Explain a replacement-cluster recovery path without a Kubernetes downgrade or two active database writers. If no safe release exists, complete lab 4's rollback exercise first.
+
+<details>
+<summary>Solution</summary>
 
 In the lab-4 Git repository, revert the known **application** release commit from that lab, not the database migration or platform upgrade:
 
@@ -189,18 +244,62 @@ Check schema backward compatibility before reverting code. If there is no safe a
 
 AKS Kubernetes downgrade is not supported. If cluster repair is unsuitable, use **blue/green cluster replacement**: provision a supported cluster and networking, configure identities and private DNS, restore required CSI data into a supported target, reconcile Git at a verified compatible SHA, run read/write checks while traffic is fenced, then change routing. Managed PostgreSQL/Service Bus remain external; do not clone them into two writers accidentally. Retain the old cluster until rollback criteria expire, but do not keep an unsupported cluster as the normal escape route.
 
+</details>
+
 ## 7. Customer debrief and cleanup
 
 Deliver: before/after versions and image IDs, target eligibility, compatibility/no-go checklist, blocked and successful eviction outputs, ARM operation result, observed traffic/transaction SLI, application rollback SHA, replacement-cluster decision, and remaining unsupported/partial items.
 
-**Model answers**
+**Task:** answer the customer questions, reconcile the evidence with the agreed objective, and remove incident state without undoing supported upgrades or enabling a competing upgrade owner.
 
-1. **"Does a 99.95% AKS SLA mean my app meets it?"** No. Control-plane availability is not ingress, database, dependency, capacity or application availability.
-2. **"Can maintenance windows guarantee no daytime change?"** No; they coordinate eligible scheduled operations, are best effort, and urgent service maintenance is an exception. Manual/Fleet work needs an explicit operating model.
-3. **"Do zones solve region loss?"** No. They address failures inside one region; shared regional dependencies and operational errors still matter.
-4. **"Should we buy LTS?"** Evaluate Premium tier/LTS support and application compatibility against your maintenance capability. Extended support is not a substitute for node-image patching, tested upgrade cadence or deprecation remediation.
+<details>
+<summary>Model answer: Does a 99.95% AKS SLA mean my app meets it?</summary>
+
+No. Control-plane availability is not ingress, database, dependency, capacity or application availability.
+
+</details>
+
+<details>
+<summary>Model answer: Can maintenance windows guarantee no daytime change?</summary>
+
+No; they coordinate eligible scheduled operations, are best effort, and urgent service maintenance is an exception. Manual/Fleet work needs an explicit operating model.
+
+</details>
+
+<details>
+<summary>Model answer: Do zones solve region loss?</summary>
+
+No. They address failures inside one region; shared regional dependencies and operational errors still matter.
+
+</details>
+
+<details>
+<summary>Model answer: Should we buy LTS?</summary>
+
+Evaluate Premium tier/LTS support and application compatibility against your maintenance capability. Extended support is not a substitute for node-image patching, tested upgrade cadence or deprecation remediation.
+
+</details>
 
 Remove the incident namespace if any step stopped early and uncordon only the node recorded in `$Node`. Keep upgraded versions, PostgreSQL, backup, application and telemetry for lab 10. Restore the previous auto-upgrade channel **only when it has a single agreed owner**; lab 10 uses Fleet and must not compete with autonomous updates. Remove no pools, PVCs, identities or regional resources in this lab.
+
+<details>
+<summary>Solution: close the change and remove incident state</summary>
+
+If the drain exercise stopped early, inspect the recorded node and incident namespace before acting:
+
+```powershell
+kubectl get node $Node
+kubectl get all,pdb -n maintenance-lab
+kubectl uncordon $Node
+kubectl delete namespace maintenance-lab --ignore-not-found
+flux get kustomizations -A
+kubectl get nodes
+kubectl get pods,pdb -n orders
+```
+
+Only use `$Node` retained from this exercise; if it was lost, identify the incident pod's node from saved evidence instead of uncordoning every node. Confirm no unexpected cordon, stalled rollout or unreconciled release remains. The closeout records both successful operations and deferred work, such as an unavailable Kubernetes target or a node-image no-op. A successful ARM operation does not override missing order IDs or a breached application objective.
+
+</details>
 
 ## Official references and status
 

@@ -6,9 +6,18 @@ This capstone depends on labs 1–9. All commands run from the workspace root in
 
 ## 1. Sign the recovery contract before provisioning
 
+**Challenge:** Agree on recovery authority, RTO/RPO, component-level recovery mechanisms and residual risks. Record the primary/secondary resource inventory and obtain the signed exercise contract before provisioning.
+
 Define roles: incident commander authorizes promotion; platform operator fences traffic/compute; database owner authorizes PostgreSQL promotion; messaging owner authorizes namespace promotion; app owner validates accepted order IDs; scribe records UTC evidence. In this synthetic lab one operator may fill all roles explicitly.
 
 Adopt these **lab targets**, not Azure guarantees: RTO ≤30 minutes after declaration; planned exercise RPO zero for the recorded accepted IDs. For an actual inaccessible-region event, asynchronous database replication can lose recent rows and a forced messaging promotion can lose messages or acknowledgements. Record actual lag and reconcile both systems. PostgreSQL and Service Bus do **not** share a distributed commit.
+
+Requirements: GA regional AKS version, PostgreSQL General Purpose replica support and quota, Service Bus non-partitioned Premium geo-replication, Front Door Private Link origin region support, x86 Linux, valid public-CA TLS certificates for two owned origin names. A self-signed lab-3 certificate **cannot** be used with Front Door Private Link certificate validation. Use DNS-01 issuance through your approved CA process; do not open an origin just for certificate validation.
+
+Keep extra regional values separate: do not overwrite primary `local.settings.json`. The secondary foundation prefix must be unique and 4–12 characters.
+
+<details>
+<summary>Solution</summary>
 
 | Component | Recovery mechanism | What it does not do |
 |---|---|---|
@@ -46,13 +55,24 @@ $SecondaryContext = "$SecondaryCluster-secondary"
 az aks get-credentials -g $Lab.ResourceGroup -n $Lab.ClusterName --context $PrimaryContext --overwrite-existing
 ```
 
-Requirements: GA regional AKS version, PostgreSQL General Purpose replica support and quota, Service Bus non-partitioned Premium geo-replication, Front Door Private Link origin region support, x86 Linux, valid public-CA TLS certificates for two owned origin names. A self-signed lab-3 certificate **cannot** be used with Front Door Private Link certificate validation. Use DNS-01 issuance through your approved CA process; do not open an origin just for certificate validation.
+The signed contract names the approving person for each role, declaration time, accepted-ID evidence source, promotion/fencing gates, success criteria and abort authority. Measure RTO from declaration to verified business service, while recording the later time when all accepted work has completed. Evaluate the planned zero-loss target by matching every accepted ID **and item**, not by assuming two replication dashboards jointly prove consistency. A missing record or unknown lag is an unresolved outcome, not an inferred zero.
+
+</details>
 
 ## 2. Reproduce the second platform from the same foundation
 
-Select a supported version available in **both** regions, compatible with lab 9, and confirm zones/SKU availability:
+**Challenge:** Reproduce a private secondary AKS platform with non-overlapping addressing, regional management access and controlled egress. Retain rendered network ranges, version/SKU checks, node health and observability/guardrail coverage.
+
+Select a supported version available in **both** regions, compatible with lab 9, and confirm zones/SKU availability.
 
 The current `infra\main.bicep` exposes `networkPrefix` as the first two address octets. This lab uses `10.60` for the secondary spoke and `10.70` for its firewall hub; primary remains `10.40`/`10.50`. Do not replace this with an invented parameter name or reuse overlapping ranges. If the foundation parameter is renamed later, update the invocation and validate the rendered subnet ranges before deployment.
+
+Configure regional management connectivity/private DNS before accessing the secondary API. Associate the **secondary** route table/subnet and transition its outbound type; never change the primary by accidentally using its outputs.
+
+The orders DR workload uses the primary geo-replicated ACR and Service Bus, not the unrelated secondary foundation registry/namespace. Those unused resources still cost money; retain them until validation and delete only after proving no consumers. Apply labs 5/7 observability/platform guardrails through their parameterized deployment/Git paths, record omissions, and verify both clusters' supported add-ons before Fleet updates.
+
+<details>
+<summary>Solution</summary>
 
 ```powershell
 az aks get-versions -l $Lab.SecondaryLocation -o table
@@ -95,7 +115,18 @@ Configure regional management connectivity/private DNS before the final command.
 
 Apply labs 5/7 observability and platform guardrails in the secondary through their parameterized deployment/Git paths, pointing telemetry at approved regional or central sinks. Record any omitted sensor/add-on as an explicit coverage gap. Fleet updates need supported add-ons in both regions, not merely two Ready clusters.
 
+</details>
+
 ## 3. Make images, identities and secrets survive primary loss
+
+**Challenge:** Make the approved image digest, least-privilege regional identities and required secrets usable without a primary-region PE. Prove a secondary-local DNS path and actual digest pull; identify how regional certificates/secrets will be recovered.
+
+Use each cluster's own issuer and regional identities. Scope shared Service Bus sender/receiver grants to the orders queue. Link regional Service Bus private DNS zones only to their own VNets: two same-name PE records in a shared zone can route clients to a failed region. Reinspect **both** ACR PE DNS-zone groups after replication, including regional data records.
+
+Keep secrets and TLS keys out of Git. Use the secondary vault's PE and scoped RBAC; rehearse supported backup/restore, replication or regeneration under its geo/tenant constraints. If the chosen image needs the lab-2 sample secret, reproduce its regional SecretProviderClass/mount **before admitting traffic**; the base DR app does not mount it.
+
+<details>
+<summary>Solution</summary>
 
 ```powershell
 az acr replication create --registry $Lab.AcrName --location $Lab.SecondaryLocation
@@ -131,7 +162,22 @@ Each cluster uses its own issuer and regional user-assigned identities from foun
 
 Regenerate synthetic lab configuration in the secondary Key Vault from its authoritative source, using that vault's regional PE and access policy/RBAC. For real secrets, decide and rehearse supported backup/restore, replication or regeneration under the vault's geo/tenant constraints. Workload IDs remove Service Bus/PostgreSQL passwords; they do not remove TLS private keys. The base DR app does not mount the lab-2 sample secret; if your current image requires it, reproduce the SecretProviderClass/mount against the secondary vault **before admitting traffic**.
 
+For the recovery decision, classify each value: non-secret configuration comes from reviewed Git/authoritative configuration, the synthetic sample can be regenerated, and a TLS key needs controlled regional distribution or independently issued regional replacement. A Workload ID grant replaces a password but not a certificate lifecycle. Record the secondary vault owner, rotation method and retrieval test rather than claiming that a deployed vault contains the primary's secrets.
+
+Keep the application passive while preparing these dependencies. The actual secondary application pull is verified during the gated task-9 activation: inspect pod `imageID` and pull events there against `$ImageDigest`. Until that succeeds through local registry/data endpoint resolution, mark the pull evidence pending rather than calling replication status a completed image test.
+
+</details>
+
 ## 4. Establish actual message and database replication
+
+**Challenge:** Configure supported data-bearing message replication and a private PostgreSQL read replica. Prove secondary readiness, known-row arrival, SQL identity mapping and timestamped replication lag before any promotion.
+
+Required path is **non-partitioned Premium** (one messaging partition). If the current namespace is partitioned, stop and migrate the synthetic exercise with the same identity/network controls; the partitioned preview path is not GA. Do not combine Geo-Replication with metadata-only Geo-DR. Synchronous replication is required for this planned queue exercise, with explicit latency/availability trade-offs; wait for secondary **Ready**.
+
+Initialize secondary SQL identities on the primary **before** creating the replica; do not overwrite existing role mappings. Keep public database access disabled and validate TLS and the independent Entra administrator settings. PostgreSQL remains asynchronous. Missing lag metrics mean **unknown**, not zero; compare a known lab-8 row as well as dashboards.
+
+<details>
+<summary>Solution</summary>
 
 Inspect current namespace partitioning first:
 
@@ -180,11 +226,42 @@ az monitor metrics list-definitions --resource $BusId -o table
 
 Use the exposed PostgreSQL replication-lag metric and Service Bus `ReplicationLagDuration` to record the latest values/timestamps in Azure Monitor. A missing metric is **unknown**, not zero. Also compare a known marker row; lag dashboards alone do not prove a particular business record arrived.
 
+On the secondary management host, use a fresh Entra token only for the verification period:
+
+```powershell
+$env:PGHOST = $Replica.fullyQualifiedDomainName
+$env:PGUSER = $Admin.userPrincipalName
+$env:PGDATABASE = 'ordersdb'
+$env:PGSSLMODE = 'verify-full'
+$env:PGSSLROOTCERT = 'system'
+$env:PGPASSWORD = az account get-access-token --resource https://ossrdbms-aad.database.windows.net --query accessToken -o tsv
+try {
+  psql -X --set ON_ERROR_STOP=1 -c 'SELECT pg_is_in_recovery();'
+  psql -X --set ON_ERROR_STOP=1 -c 'SELECT order_id,item FROM processed_orders ORDER BY order_id;'
+  psql -X --set ON_ERROR_STOP=1 -c "SELECT grantee,privilege_type FROM information_schema.role_table_grants WHERE table_schema='public' AND table_name='processed_orders' AND grantee IN ('orders_api_dr','orders_worker_dr') ORDER BY grantee,privilege_type;"
+} finally { Remove-Item Env:PGPASSWORD -ErrorAction SilentlyContinue }
+```
+
+Expect recovery mode `t`, the saved durable ID with its original item, API SELECT and worker INSERT/SELECT. Check the initialization's object-ID mapping against secondary identity outputs as well as SQL grants. A role with a matching name but the wrong object ID is not successful authentication. Capture the metric's sample timestamp and aggregation; no sample is not a successful readiness gate.
+
+</details>
+
 ## 5. Reconcile a passive application without allowing a second writer
 
-The helper creates a region-specific copy of the shared base manifests, patches regional Workload IDs, pins the image digest, configures the database and dependencies, and sets both replica counts to **zero**. It deliberately excludes HPA/KEDA, so they cannot awaken the passive worker. This is a **warm platform/cold application** lab, not a pre-running active/active implementation.
+**Challenge:** Reconcile a separate, least-privilege secondary GitOps application while proving it cannot start another writer. Retain the rendered manifest, regional source/credential scope, owner registration and live zero-replica evidence.
+
+This is a **warm platform/cold application** lab, not active/active. Both application replica counts must remain **zero**, with no secondary HPA/KEDA resources. Resolve PostgreSQL from the secondary DNS view and use local PE addresses, immutable image digests and no passwords.
 
 **Scaler identity boundary:** lab 6's primary KEDA operator uses the separate `${Lab.Prefix}-scaler` UAI from deployment `scaling-identity`, not the foundation worker identity. Preserve that scaler client ID, operator federation and `TriggerAuthentication/servicebus-workload` throughout primary fencing/failback; the fencing patch changes none of them. The secondary helper copies `k8s\base`, **not** the primary GitOps application directory containing scaling assets, and rejects rendered HPA/KEDA authentication resources or `__SCALER_CLIENT_ID__`. Consequently this required fixed-replica secondary has no KEDA operator configuration or scaler client ID to substitute, and creates no secondary scaler. Its worker retains receiver-only Service Bus permission. Adding secondary autoscaling would be a separate change requiring an independently provisioned scaler identity, secondary-issuer operator federation and correct shared-queue scope; never reuse the primary scaler or substitute the worker client ID.
+
+Use the **existing lab-4 repository**, a new secondary cluster path and a new scoped read-only runtime credential. Verify owner/name/access before bootstrap, which can otherwise create a misspelled repository. Use the actual default branch/personal-account flag as appropriate. Mirror the same Flux controller version through the authorized private runner; no direct `ghcr.io` pulls. Any temporary bootstrap branch-policy exception must be narrowly approved and removed. Revoke the replaced bootstrap PAT, rotate runtime credentials, and keep normal changes on `Publish-ReviewedChange.ps1`.
+
+Namespace/RBAC creation remains platform-owned. Persist the app CR and secondary RBAC in the **secondary** bootstrap root's explicit resource list, never the primary scope.
+
+<details>
+<summary>Solution</summary>
+
+The helper copies the shared base, patches regional Workload IDs and dependencies, pins the digest and sets both deployments to zero without autoscalers:
 
 ```powershell
 $PgReplicaIp = (Resolve-DnsName $Replica.fullyQualifiedDomainName -Type A | Where-Object IPAddress | Select-Object -First 1).IPAddress
@@ -230,7 +307,18 @@ kubectl --context $SecondaryContext get deployment -n orders
 
 Use the actual default branch if not `main`; add `--personal` for a personal-account repository as in lab 4. Revoke the bootstrap PAT after replacing it, not the runtime PAT; schedule rotation. `flux bootstrap github` can create a repository if misspelled: verify the existing owner/name and access **before executing**. This pack does not ask you to create a repository. Persist the secondary app CR and `secondary-rbac.yaml` in `gitops/clusters/secondary`; keep them out of primary bootstrap scope. Namespace creation is platform-owned; the generated app base deliberately excludes its namespace manifest.
 
+</details>
+
 ## 6. Publish only private, TLS-validated regional origins
+
+**Challenge:** Publish the two regional origins through Front Door Premium Private Link, enforce trusted TLS and WAF, and prove that the secondary remains disabled until data activation. Persist the origin owners in the correct Git roots and identify any alternate ingress bypass.
+
+**Safety gates:** Approve only the two verified Front Door endpoint requests. Keep both load balancers private, use distinct owned origin names with CA-issued certificates, and never commit private keys or disable certificate-name verification. Keep namespace/RBAC/origin resources platform-owned. Do not manually edit AKS-managed load balancers, use a public origin as a shortcut, or treat a failed health probe as a writer fence.
+
+**Exit evidence:** Retain private origin IPs, certificate validation, reviewed endpoint approvals, Git owner registrations, a normal 200, the controlled WAF 403 and its matching log. Record whether the old internal route was retired or deliberately retained as a trusted-network bypass.
+
+<details>
+<summary>Solution</summary>
 
 Required supported design: **Front Door Premium → approved Private Link → Standard internal Load Balancer + Private Link Service → unprivileged TLS reverse proxy → order-api**. It does not rely on unverified Private Link integration with the lab-3 managed Gateway implementation. PLS requires Standard LB backend type `nodeIPConfiguration`; check before provisioning:
 
@@ -332,6 +420,20 @@ Invoke-WebRequest "$EdgeUrl/readyz" -Headers @{'X-Lab-Waf-Test'='block'} -SkipHt
 
 Expected primary normal response 200 and WAF test 403; save WAF log showing `ControlledWafTest`. Managed default/bot rules and custom test rule run in Prevention. Secondary origin is **Disabled** in ARM until the data activation gate. Front Door probes only readiness, not database writeability or queue recovery.
 
+The template does not configure diagnostic export. Enable the WAF category on the Front Door profile, then repeat the controlled request so there is a record to correlate:
+
+```powershell
+$FrontDoorResourceId = az afd profile show -g $Lab.ResourceGroup --profile-name $FrontDoor --query id -o tsv
+az monitor diagnostic-settings categories list --resource $FrontDoorResourceId -o table
+$WafLogs = '[{"category":"FrontDoorWebApplicationFirewallLog","enabled":true}]'
+az monitor diagnostic-settings create --name lab-frontdoor-waf --resource $FrontDoorResourceId `
+  --workspace $Primary.workspaceId.value --logs $WafLogs
+$WafTestUtc = [DateTime]::UtcNow
+Invoke-WebRequest "$EdgeUrl/readyz" -Headers @{'X-Lab-Waf-Test'='block'} -SkipHttpErrorCheck
+```
+
+Confirm the category exists in the live listing before creating the setting. After ingestion, in the target Log Analytics workspace filter `AzureDiagnostics` to this profile's resource ID, category `FrontDoorWebApplicationFirewallLog`, and the recorded UTC interval. Retain the entry naming `ControlledWafTest` and action `Block`; an unrelated 403 or no ingested record is incomplete evidence. Include the diagnostic setting in final telemetry cleanup.
+
 **Review alternate entry points:** lab 3's `Gateway/gateway-system/orders-gateway` uses the `approuting-istio` class and an **internal** load balancer; its `HTTPRoute/orders/orders` is not a public-origin solution. This capstone creates a separate supported ILB/PLS origin rather than turning that Gateway public or assuming it supports Front Door Private Link directly. No public/DNAT variant is required for this path.
 
 If Front Door must be the only supported application entry point, retire the old direct internal Gateway route from its authoritative platform source. If lab 3's objects are still manually platform-owned, remove these two named resources explicitly. Otherwise remove them through their Flux source, and ensure no controller recreates them. Retain the namespace/certificate until final cleanup:
@@ -348,7 +450,16 @@ If direct internal management access is deliberately retained instead, record it
 
 When every origin is unhealthy, Front Door may route rather than become an absolute traffic fence: **Disabled origins and stopped writers are the incident controls**, not probe failure alone.
 
+</details>
+
 ## 7. Execute a supported staged Fleet update independently of DR
+
+**Challenge:** Run a supported staged update, observe the secondary-first sequence and soak, and retain each member's before/after image IDs and outcome. Distinguish an actual replacement from a no-op and demonstrate the stop decision for a failed validation.
+
+**Safety gates:** Do not overlap this task with the regional failover exercise. Agree member maintenance windows and one upgrade owner; a timer is not human approval. Use supported GA stages, not preview failure tolerances, and stop on failed health/business checks.
+
+<details>
+<summary>Solution</summary>
 
 ```powershell
 az extension add -n fleet --upgrade
@@ -376,7 +487,18 @@ az fleet updaterun stop -g $Lab.ResourceGroup --fleet-name $Fleet -n $Run
 
 For a successful exercise do not stop; wait until both member statuses are successful and save their image IDs. If already latest, record no-op and repeat after an available image release, or select a supported common Kubernetes target and use `Full --kubernetes-version <target>`. A no-op is not an actual image replacement. Fleet resources in the primary region are not part of the emergency traffic/data failover path.
 
+Capture each cluster's node-pool image IDs using lab 9 task 5 before starting and after the corresponding stage. Match those records to the member status in `updaterun show`, not just the run's creation result. During secondary validation require healthy system add-ons and private image access while the app remains passive; verify primary order processing during soak. If any gate fails, record the failure and stop the run rather than waiting for the timer to advance.
+
+</details>
+
 ## 8. Create pending business work, fence primary, and declare the incident
+
+**Challenge:** Record a known replicated order, accumulate exactly the bounded synthetic batch, declare the incident, and fence primary traffic, replicas and autoscalers in both live and Git state. Retain the accepted-ID/item ledger, incident UTC time and fencing SHA.
+
+**Safety gates:** No Fleet/AKS maintenance or other test producers may be running. Do not delete the queue or alter working identities. Suspend only the named app/autoscaler owners, keep security/platform reconciliation active, and do not promote data until both regions' application writers are stopped and primary fencing is durable.
+
+<details>
+<summary>Solution</summary>
 
 Do not run this during Fleet/AKS maintenance. First record a durable lab-8 order that already exists in the replica. Then deliberately accumulate a bounded Service Bus backlog.
 
@@ -429,7 +551,29 @@ git rev-parse HEAD
 
 The supplied patch targets lab 6's `ScaledObject/order-worker` and removes `HorizontalPodAutoscaler/order-api` from the effective Git render with a strategic `$patch: delete`. If a customer renamed either object, update those exact targets before rendering. Require the rendered API HPA to be absent, the worker ScaledObject paused at zero, both deployments at zero, and no live API HPA before promotion. Do not rely on HPA's zero-replica behavior as a durable writer fence. Do not remove the fencing patch while secondary is active.
 
+Inspect desired and live state before authorizing task 9:
+
+```powershell
+kubectl kustomize .\gitops\clusters\primary\apps\orders |
+  Set-Content .\.artifacts\advanced\primary-fenced.yaml
+kubectl --context $PrimaryContext get deployment,hpa,scaledobject -n orders -o yaml
+kubectl --context $SecondaryContext get deployment,pods -n orders
+az afd origin list -g $Lab.ResourceGroup --profile-name $FrontDoor --origin-group-name orders `
+  --query '[].{name:name,state:enabledState}' -o table
+```
+
+Check the two named application Deployments rather than requiring the separate TLS proxy to stop. `order-api` and `order-worker` must have zero desired and actual replicas and no remaining terminating application pods; the primary worker ScaledObject must be paused at zero and the API HPA absent. Both Front Door origins must report Disabled. A saved fencing SHA without the corresponding live writer shutdown is not a completed gate.
+
+</details>
+
 ## 9. Promote data and messages, then admit secondary application traffic
+
+**Challenge:** Perform planned messaging/database promotions, verify the recovered marker and grants, activate only the secondary application, then prove every accepted ID/item and SQL uniqueness before opening edge traffic. Measure business recovery and backlog completion separately, test duplicate redelivery, and process a new secondary order.
+
+**Safety gates:** Keep primary Git fencing and suspensions intact. The required exercise does not force data loss. Never enable the secondary origin based solely on `/readyz`; require writable promoted data, the right queue region and verified business records. Missing IDs or unknown replication lag must remain explicit blockers.
+
+<details>
+<summary>Solution</summary>
 
 Because source services remain accessible, use **planned** operations. Do not force loss for this required path:
 
@@ -470,6 +614,8 @@ foreach ($Order in $Accepted) { Invoke-RestMethod "http://127.0.0.1:18080/orders
 
 Require all 20 IDs and expected items, and one SQL row per ID. Then:
 
+Use task 4's fresh-token `psql` environment against the promoted replica. For each accepted ID, run the parameterized count query from lab 8 task 3; require the original item and `copies = 1`. Retain that SQL evidence alongside `Test-OrderLedger.ps1`'s HTTP report: the helper checks ID/item values but deliberately does not claim SQL uniqueness.
+
 ```powershell
 az afd origin update -g $Lab.ResourceGroup --profile-name $FrontDoor --origin-group-name orders --origin-name secondary --enabled-state Enabled
 Invoke-WebRequest "$EdgeUrl/readyz"
@@ -481,9 +627,35 @@ $Recovered = [DateTime]::UtcNow
 
 Write `Lost=0` **only after verifying every recorded ID/item**. Re-submit one identical accepted order, confirm a single database row, then create a new order through Front Door and verify worker/database completion. Check dead-letter count is unchanged. Record HTTP recovery time separately from "all accepted orders processed" time. Missing IDs are an investigation, not permission to report success.
 
+Use the saved payload for redelivery and add the newly accepted secondary order to the ledger so failback cannot accidentally validate only pre-incident data:
+
+```powershell
+Invoke-RestMethod "$EdgeUrl/orders" -Method Post -ContentType application/json `
+  -Body ($Accepted[0] | ConvertTo-Json)
+$SecondaryOrder = @{id="secondary-$([guid]::NewGuid().ToString('N'))";item='synthetic-after-promotion'}
+Invoke-RestMethod "$EdgeUrl/orders" -Method Post -ContentType application/json `
+  -Body ($SecondaryOrder | ConvertTo-Json)
+$Accepted = @($Accepted) + $SecondaryOrder
+$Accepted | ConvertTo-Json | Set-Content .\.artifacts\advanced\dr-accepted.json
+.\advanced\Test-OrderLedger.ps1 -BaseUri $EdgeUrl `
+  -ReportPath .\.artifacts\advanced\secondary-verification.json -TimeoutSeconds 180
+az servicebus queue show -g $Lab.ResourceGroup --namespace-name $Lab.ServiceBusName -n orders --query countDetails
+```
+
+Require the repeated ID's duplicate-processing log and one SQL row with its original item; the new secondary ID must also have one row. Compare dead-letter count with the pre-incident baseline, including the intentional conflicting-ID evidence from lab 8. Compare actual elapsed recovery with the agreed 1,800-second target and report a breach honestly, even when all IDs eventually arrive. Inspect secondary pod `imageID`, private DNS resolution and pull events against the approved digest to close task 3's deferred image-pull evidence.
+
 **Real inaccessible-region variant (discussion, not a required destructive action):** incident command weighs lag/data loss and fencing confidence before `--force true` for Service Bus or `--promote-option forced` for PostgreSQL. A network partition is not proof the old writer is dead. Microsoft recommends deleting/recreating the old Service Bus region after forced promotion rather than trusting resynchronization. Reconcile accepted-but-missing messages from an independent durable producer ledger/outbox; the lab's local evidence file is **not** a production recovery system.
 
+</details>
+
 ## 10. Fail back with a new replica, not by pointing at stale data
+
+**Challenge:** Return service to the original region using a new replica of the promoted database, a planned writer handover, updated authoritative endpoints and restored autoscaler ownership. Verify the entire ledger, including the secondary-created order, and restore replication protection.
+
+**Safety gates:** The original database is stale after standalone promotion; do not point back to it or replay the original database deployment. Fence secondary producers and writers before planned return promotions. Keep primary ingress disabled until private business checks succeed; never permit two active writers or permanently return replica ownership to Flux.
+
+<details>
+<summary>Solution</summary>
 
 Do not re-enable primary origin just because `/readyz` becomes healthy. After standalone promotion, the old `$Pg` is stale. While secondary remains active, create a **new** PostgreSQL replica in the primary region from the promoted secondary:
 
@@ -558,19 +730,24 @@ az servicebus namespace show -g $Lab.ResourceGroup -n $Lab.ServiceBusName --quer
 
 Expected primary active, secondary API/worker zero, primary edge Enabled/secondary Disabled, queue promoted back and all orders present. **The active primary database is now `$PgReturn`, not `$Pg`.** Update operational configuration/inventory and future IaC strategy; do not rerun the old `postgres` deployment and silently point back to an empty or stale server. Re-establish a read replica from the new active database to restore protection after the exercise; standalone promotions break the former replication relationship.
 
+For reprotection, repeat task 4's supported replica-create/private-endpoint/Entra-admin sequence with `$ReturnServer.id` as the source and a new, explicitly recorded secondary replica name. Keep that replica read-only, verify the new primary's marker there and record lag. Do not reattach an old standalone database by merely changing a hostname. If immediately proceeding to approved final teardown, record reprotection as intentionally omitted for decommissioning, not restored DR readiness.
+
+</details>
+
 ## 11. Deliver the customer decision and safely decommission
 
 Deliver a UTC timeline, infrastructure/output IDs, Git SHAs, certificate validation/private-origin evidence, WAF block evidence, Fleet member outcomes, both promotions, all accepted IDs/items, duplicate test, replication lag observations, measured RTO/RPO, failback result and new authoritative database name.
 
-**Model answers**
+**Challenge:** Present a go/no-go recovery decision supported by the measured timeline and ledger, answer the customer questions, then retire only the approved disposable footprint in dependency order.
 
-1. **"Why not active/active?"** Competing writers require conflict semantics, ownership and distributed-state design. This service has one active worker region and an explicit write-fencing protocol; a routing weight is not a concurrency control.
-2. **"Why not automatic failover whenever a probe fails?"** A readiness failure does not identify database correctness, queue replication or whether the original writer is alive. Operator/data gates avoid split brain; automation must encode and verify those gates.
-3. **"Does synchronous Service Bus give zero-loss orders?"** It improves message replication semantics, but database replication is separate. A completed message whose row was not replicated can still cause a cross-system gap in a real forced event. Use a durable outbox/inbox/reconciliation design for stronger guarantees.
-4. **"Why Fleet?"** It provides repeatable update sequencing and status across members. It is neither a global ingress controller for this application nor a database/message recovery engine.
-5. **"When is this worth it?"** When quantified business loss and recovery requirements justify two-region capacity, replication latency/cost, certificates, DNS, security operations, on-call authority and repeated rehearsals. Zone redundancy plus restore may be adequate for less stringent requirements.
+**Safety gates:** Do not delete the secondary while it hosts the active database or Service Bus primary. Require successful failback or explicit approval to delete synthetic business data; enumerate resource groups and consumers first. Preserve required backup retention and evidence. Never reset shared subscription policy/Defender settings or delete shared registries/DNS zones blindly.
 
-Do **not** delete the secondary while the active database or Service Bus primary still resides there. At end-of-pack teardown:
+<details>
+<summary>Solution: recovery decision and final teardown</summary>
+
+A completed planned exercise has a verified writer handover, every accepted ID/item and one row per business key, the duplicate test, a new order after each activation, and a measured recovery duration compared with the signed target. Report forced-region loss as an unexecuted discussion variant, not tested zero-loss resilience. A Fleet no-op, pending image-pull evidence or omitted reprotection remains explicitly qualified in the handover.
+
+At end-of-pack teardown:
 
 1. Confirm successful failback or obtain explicit approval to delete all synthetic business data. Stop producers; disable both Front Door origins.
 2. Stop active Fleet runs; remove member registrations (`az fleet member delete -g $Lab.ResourceGroup --fleet-name $Fleet -n secondary --yes`, likewise primary), then delete the Fleet resource.
@@ -579,6 +756,43 @@ Do **not** delete the secondary while the active database or Service Bus primary
 5. Keep active `$PgReturn` and any required replica/backup until retention expires. Delete stale `$Pg` / promoted `$PgReplica` only after checking no workload endpoint references them. Remove their PEs, not shared private DNS zone links still serving other databases.
 6. Remove ACR geo-replication only after all secondary digest consumers are gone; do not delete shared ACR while primary still runs. Delete secondary scoped identities/role assignments, private endpoints and the secondary RG last (`az group delete -n $SecondaryRg --yes`) only after enumerating its resources.
 7. Follow lab 8's backup retention/extension/snapshot teardown **before** removing the primary cluster. Preserve the evidence bundle; securely delete local TLS private keys and auth material through the approved workstation process. No subscription-wide policy/Defender state is blindly reset.
+
+</details>
+
+<details>
+<summary>Model answer: Why not active/active?</summary>
+
+Competing writers require conflict semantics, ownership and distributed-state design. This service has one active worker region and an explicit write-fencing protocol; a routing weight is not a concurrency control.
+
+</details>
+
+<details>
+<summary>Model answer: Why not automatic failover whenever a probe fails?</summary>
+
+A readiness failure does not identify database correctness, queue replication or whether the original writer is alive. Operator/data gates avoid split brain; automation must encode and verify those gates.
+
+</details>
+
+<details>
+<summary>Model answer: Does synchronous Service Bus give zero-loss orders?</summary>
+
+It improves message replication semantics, but database replication is separate. A completed message whose row was not replicated can still cause a cross-system gap in a real forced event. Use a durable outbox/inbox/reconciliation design for stronger guarantees.
+
+</details>
+
+<details>
+<summary>Model answer: Why Fleet?</summary>
+
+It provides repeatable update sequencing and status across members. It is neither a global ingress controller for this application nor a database/message recovery engine.
+
+</details>
+
+<details>
+<summary>Model answer: When is this worth it?</summary>
+
+When quantified business loss and recovery requirements justify two-region capacity, replication latency/cost, certificates, DNS, security operations, on-call authority and repeated rehearsals. Zone redundancy plus restore may be adequate for less stringent requirements.
+
+</details>
 
 ## Official references and status
 

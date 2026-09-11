@@ -8,6 +8,11 @@
 
 ### 1. Create private service endpoints with DNS
 
+**Task:** establish private endpoints and DNS for ACR, Key Vault and Service Bus, then disable their public data endpoints and demonstrate fresh workload access. Do not disable public access until private reachability works from the management/build host and cluster.
+
+<details>
+<summary>Solution</summary>
+
 ```powershell
 . .\scripts\Use-Lab.ps1
 az deployment group create -g $Lab.ResourceGroup -n private-dependencies `
@@ -34,7 +39,14 @@ kubectl rollout status deployment/order-worker -n orders --timeout=300s
 
 Confirm new pods pull images, mount CSI, and process a fresh order. Public Azure management APIs still work; disabling data-plane public access does not disable ARM management.
 
+</details>
+
 ### 2. Establish explicit egress via a peered firewall hub
+
+**Task:** review and deploy the bounded firewall hub, route AKS egress through it, and enable diagnostic evidence. Approve the standing firewall cost first; do not use wildcard allow rules or redeploy the original foundation over the progressed cluster.
+
+<details>
+<summary>Solution</summary>
 
 Review `infra\firewall.bicep`: AKS FQDN tag, HTTPS identity/GitOps/monitoring allowances, and required control-plane network rules. The private API is not protected with public API authorized ranges; those are a different public endpoint design.
 
@@ -67,7 +79,14 @@ az monitor diagnostic-settings create --name lab-firewall --resource $firewallId
 
 Inspect documented AKS and add-on outbound endpoints whenever enabling new features. Do not add `*` allow rules to hide an incomplete allowlist. The management/build host needs its own explicit outbound path; this route table is attached only to AKS nodes.
 
+</details>
+
 ### 3. Enable the managed Gateway API implementation
+
+**Task:** enable the supported managed Gateway API and ingress implementation, and identify evidence that both are ready. Do not install competing CRDs or combine this ingress add-on with the managed Istio service-mesh add-on.
+
+<details>
+<summary>Solution</summary>
 
 ```powershell
 az aks update -g $Lab.ResourceGroup -n $Lab.ClusterName --enable-gateway-api -o none
@@ -79,7 +98,14 @@ kubectl get pods -n aks-istio-system
 
 Expected: managed standard-channel Gateway API CRDs and the `approuting-istio` GatewayClass. Do not install competing self-managed Gateway CRDs. This add-on is ingress-only, not a sidecar mesh, and cannot coexist with the managed Istio service-mesh add-on.
 
+</details>
+
 ### 4. Terminate TLS at an internal gateway
+
+**Task:** publish the API at an internal HTTPS gateway, verify route attachment and certificate validation, then configure ordinary private DNS and client trust for later PowerShell exercises. Keep ingress internal, never commit TLS private keys, and never bypass certificate validation. Import only your own lab-generated certificate into the current user's trust store; record its thumbprint for cleanup.
+
+<details>
+<summary>Solution</summary>
 
 Set `Hostname` in local settings to a lab DNS name. An owned public domain is not needed for this internal self-signed exercise; lab 10 needs one for trusted public TLS.
 
@@ -129,7 +155,14 @@ Invoke-RestMethod "https://$($Lab.Hostname)/readyz"
 
 Trust only the certificate you just generated in this disposable lab; never import an arbitrary supplied root. The self-signed certificate expires after 14 days. Renew the certificate, update the Kubernetes TLS Secret and replace the old current-user trust entry if resuming after expiry. A trusted enterprise certificate issued for the hostname avoids this local lab trust setup. Do not add certificate-validation bypasses to the load generator.
 
+</details>
+
 ### 5. Apply least-required application network access
+
+**Task:** apply default-deny application policies with only the required allowances. Prove approved order processing, denied worker-to-API traffic and denied unapproved public HTTPS, attributing each denial to the right control. Keep the extended rendered base for lab 4.
+
+<details>
+<summary>Solution</summary>
 
 ```powershell
 Copy-Item .\k8s\network\policies.yaml .\rendered\base\policies.yaml
@@ -176,7 +209,16 @@ kubectl exec -n orders $pod -- python -c `
 
 Expect firewall denial and a corresponding log; a generic failure without destination/rule evidence is not proof of enforcement. Confirm approved Service Bus processing still works through the gateway.
 
+In the workspace's firewall diagnostic records, filter to the test's UTC time, destination `example.org`, and action `Deny`; retain the source IP and matched rule/default-deny evidence. The worker-to-API request uses port 80 and is denied by the application policies, while public HTTPS is permitted at the pod layer and restricted by the firewall. A TLS or DNS error without matching firewall evidence is not the expected answer.
+
+</details>
+
 ### 6. Break and repair private DNS without changing production-like records
+
+**Task:** simulate wrong Service Bus resolution for only the lab worker, contrast the pod and management-host resolution contexts, then recover processing. Do not alter shared private-zone records; remove the fault before proceeding or pausing.
+
+<details>
+<summary>Solution</summary>
 
 Read the healthy record, then use a short-lived pod-local host override to simulate incorrect DNS on a disposable copy rather than corrupting a shared private zone:
 
@@ -193,7 +235,15 @@ kubectl describe deployment order-worker -n orders
 
 Inspect `/etc/hosts` inside the current worker pod and compare with `Resolve-DnsName` on the management host. The pod override should produce a Service Bus timeout while the administrator still resolves the real private endpoint. This illustrates that resolution context matters; it is not an authoritative DNS-zone outage.
 
-**Solution:**
+```powershell
+kubectl rollout status deployment/order-worker -n orders --timeout=300s
+$worker = kubectl get pod -n orders -l app=order-worker -o jsonpath='{.items[0].metadata.name}'
+kubectl exec -n orders $worker -- python -c "from pathlib import Path; print(Path('/etc/hosts').read_text())"
+Resolve-DnsName "$($Lab.ServiceBusName).servicebus.windows.net"
+kubectl logs -n orders $worker --since=5m
+```
+
+**Recovery:**
 
 ```powershell
 kubectl patch deployment order-worker -n orders --type merge `
@@ -203,20 +253,75 @@ kubectl rollout status deployment/order-worker -n orders --timeout=300s
 
 Submit a new order, confirm worker processing, and check for accumulated retries/dead-letter messages.
 
+```powershell
+az servicebus queue show -g $Lab.ResourceGroup --namespace-name $Lab.ServiceBusName `
+  --name orders --query countDetails -o json
+```
+
+Use a new ID with the HTTPS order command in task 5 and find that same ID in the recovered worker's logs. Backlog draining is supporting evidence, not a substitute for correlating the new order.
+
+</details>
+
 ## Exit evidence and customer discussion
 
 Keep private resolutions, disabled public data endpoints, the effective outbound type, accepted TLS route, negative east-west/outbound evidence, firewall log correlation and restored processing.
 
-| Customer question | Model answer |
-|---|---|
-| Does private AKS mean the app cannot be public? | No. The control-plane endpoint and application ingress are separate design choices. |
-| Is a NAT gateway a firewall? | NAT provides address translation and SNAT capacity, not an application destination policy. |
-| Why Cilium Overlay? | It conserves VNet IPs and provides the managed data plane. Direct pod-IP reachability may justify Azure CNI Pod Subnet instead. |
-| Why Gateway API? | It separates infrastructure and route ownership and is the modern managed ingress path. Application routing and Application Gateway for Containers have different operational/support characteristics. |
-| Does this give WAF, API authentication or service mTLS? | No. Gateway routing/TLS, WAF, identity-aware API controls and east-west mesh policy solve distinct problems. |
+<details>
+<summary>Model answer: Does private AKS mean the app cannot be public?</summary>
+
+No. The control-plane endpoint and application ingress are separate design choices.
+
+</details>
+
+<details>
+<summary>Model answer: Is a NAT gateway a firewall?</summary>
+
+NAT provides address translation and SNAT capacity, not an application destination policy.
+
+</details>
+
+<details>
+<summary>Model answer: Why Cilium Overlay?</summary>
+
+It conserves VNet IPs and provides the managed data plane. Direct pod-IP reachability may justify Azure CNI Pod Subnet instead.
+
+</details>
+
+<details>
+<summary>Model answer: Why Gateway API?</summary>
+
+It separates infrastructure and route ownership and is the modern managed ingress path. Application routing and Application Gateway for Containers have different operational/support characteristics.
+
+</details>
+
+<details>
+<summary>Model answer: Does this give WAF, API authentication or service mTLS?</summary>
+
+No. Gateway routing/TLS, WAF, identity-aware API controls and east-west mesh policy solve distinct problems.
+
+</details>
 
 ## Cleanup and references
 
 Remove the host override, keep private endpoints/firewall/policies/gateway and private ingress DNS for later labs, and protect/delete local certificate files at final teardown. At final teardown, remove the specific imported lab certificate from `Cert:\CurrentUser\Root` using the thumbprint saved in `rendered\certs\trusted-thumbprint.txt`; do not remove unrelated trusted certificates. Do not redeploy the lab 1 bootstrap template over these network changes. Keep `rendered\base` intact for Flux adoption and `rendered\gateway.yaml` as the separately owned platform ingress configuration.
+
+<details>
+<summary>Solution: cumulative and final certificate cleanup</summary>
+
+For the handoff to lab 4, complete task 6's recovery and demonstrate a fresh processed order over ordinary HTTPS. Leave the private DNS zone and current-user trust entry in place because later load scripts need them.
+
+Only at **final teardown**, on the Windows workstation where you imported the lab certificate, inspect and remove the exact saved thumbprint:
+
+```powershell
+$thumbprint = (Get-Content .\rendered\certs\trusted-thumbprint.txt -Raw).Trim()
+if ($thumbprint -notmatch '^[A-Fa-f0-9]{40}$') { throw 'Invalid saved certificate thumbprint; inspect the lab certificate before removing anything.' }
+$certificatePath = "Cert:\CurrentUser\Root\$thumbprint"
+Get-Item -LiteralPath $certificatePath | Format-List Subject,Thumbprint,NotAfter
+Remove-Item -LiteralPath $certificatePath -Confirm
+```
+
+Confirm the displayed certificate is the one generated for this lab before approving removal. If the certificate was renewed, account for each lab-specific trust entry from the renewal record; do not remove unrelated roots or wildcard the certificate store. Protect local keys until the dependent gateways are retired, then remove the specific lab certificate/key files as part of final pack teardown.
+
+</details>
 
 Sources reviewed 2026-09-10: [AKS firewall egress](https://learn.microsoft.com/azure/aks/limit-egress-traffic), [required outbound rules](https://learn.microsoft.com/azure/aks/outbound-rules-control-egress), [managed Gateway API](https://learn.microsoft.com/azure/aks/managed-gateway-api), [application routing Gateway API](https://learn.microsoft.com/azure/aks/app-routing-gateway-api), [Gateway TLS](https://learn.microsoft.com/azure/aks/app-routing-gateway-api-tls), [ACR Private Link](https://learn.microsoft.com/azure/container-registry/container-registry-private-link).

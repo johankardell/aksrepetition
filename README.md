@@ -4,6 +4,8 @@ Ten cumulative, hands-on labs for an experienced AKS practitioner returning to c
 
 **Start with [Lab 1](labs/01-baseline.md).** The guides include commands, expected evidence, controlled failures, recovery instructions, and customer questions with model talking points. Run them in order; later labs depend on earlier state.
 
+Each task keeps its challenge prompt visible and provides a collapsed **Solution** block with the worked commands, explanations and recovery steps. Expand it when you need help; customer questions have separate collapsed **Model answer** blocks. Prerequisites, safety boundaries and required exit evidence remain visible. Collapsing a block only hides its contents in the rendered guide; it does not make any setup task optional. Use GitHub's rendered Markdown view to expand the blocks.
+
 | Lab | Customer capability | Main technologies |
 |---|---|---|
 | [1. Enterprise baseline](labs/01-baseline.md) | Establish and justify the platform | Bicep, private AKS, Entra RBAC, Cilium Overlay, ACR, availability |
