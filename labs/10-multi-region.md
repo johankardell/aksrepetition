@@ -747,6 +747,8 @@ Deliver a UTC timeline, infrastructure/output IDs, Git SHAs, certificate validat
 
 A completed planned exercise has a verified writer handover, every accepted ID/item and one row per business key, the duplicate test, a new order after each activation, and a measured recovery duration compared with the signed target. Report forced-region loss as an unexecuted discussion variant, not tested zero-loss resilience. A Fleet no-op, pending image-pull evidence or omitted reprotection remains explicitly qualified in the handover.
 
+If you ran [Lab 11: KAITO inference](11-kaito.md), complete its Workspace and GPU-pool cleanup before the end-of-pack teardown below. Do not leave an active model Workspace or assume deleting its namespace removed its Azure GPU compute.
+
 At end-of-pack teardown:
 
 1. Confirm successful failback or obtain explicit approval to delete all synthetic business data. Stop producers; disable both Front Door origins.
