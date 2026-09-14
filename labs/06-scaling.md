@@ -603,6 +603,10 @@ No. The worker remains receiver-only; a separate operator-federated scaler ident
 
 </details>
 
+## Optional extension
+
+With the scaling baseline healthy and temporary faults removed, continue to lab 7 or run [Lab 11: KAITO inference](11-kaito.md) first. The KAITO exercise requires separate GPU quota/budget approval and same-session GPU cleanup; it does not replace the HPA/KEDA work or become a prerequisite for later labs.
+
 ## References and support
 
 Source review: **2026-09-10**. HPA autoscaling/v2, cluster autoscaler, managed KEDA add-on/Workload ID and Spot node pools are the required supported features. `keda.sh/v1alpha1` is KEDA's published stable operational CRD API name; it does not mean this lab requires an AKS preview. Validate the KEDA minor mapped to the chosen GA Kubernetes version at execution. No capacity, eviction, scaling or Azure role changes were executed while authoring.

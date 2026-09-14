@@ -1,8 +1,8 @@
 # Enterprise AKS refresher - 2026
 
-Ten cumulative, hands-on labs for an experienced AKS practitioner returning to customer-facing work. No pods-and-services introductory tour: start with a private, identity-enabled platform and end with regional recovery and fleet operations.
+Ten cumulative, hands-on labs plus an optional KAITO GPU-inference exercise for an experienced AKS practitioner returning to customer-facing work. No pods-and-services introductory tour: start with a private, identity-enabled platform and end with regional recovery and fleet operations.
 
-**Start with [Lab 1](labs/01-baseline.md).** The guides include commands, expected evidence, controlled failures, recovery instructions, and customer questions with model talking points. Run them in order; later labs depend on earlier state.
+**Start with [Lab 1](labs/01-baseline.md).** The guides include commands, expected evidence, controlled failures, recovery instructions, and customer questions with model talking points. Run labs 1-10 in order; later labs depend on earlier state. [Lab 11](labs/11-kaito.md) is an optional extension after lab 6, before final teardown, with separate GPU quota and budget approval.
 
 Each task keeps its challenge prompt visible and provides a collapsed **Solution** block with the worked commands, explanations and recovery steps. Expand it when you need help; customer questions have separate collapsed **Model answer** blocks. Prerequisites, safety boundaries and required exit evidence remain visible. Collapsing a block only hides its contents in the rendered guide; it does not make any setup task optional. Use GitHub's rendered Markdown view to expand the blocks.
 
@@ -18,10 +18,11 @@ Each task keeps its challenge prompt visible and provides a collapsed **Solution
 | [8. Data and recovery](labs/08-data-recovery.md) | Choose and recover durable state | PostgreSQL, CSI Disk/Files, AKS Backup, database recovery |
 | [9. Lifecycle management](labs/09-upgrades.md) | Stay supported while managing disruption | Upgrades, node images, maintenance, PDBs, surge capacity |
 | [10. Multi-region capstone](labs/10-multi-region.md) | Recover the service and manage multiple clusters | Front Door/WAF, Fleet, regional failover, RTO/RPO, failback |
+| [11. KAITO inference (optional)](labs/11-kaito.md) | Operate and evaluate a private self-hosted model | AI toolchain operator, GPU provisioning, Phi-4-mini, vLLM, inference isolation |
 
 ## Scope and readiness
 
-These are **lab implementation materials, not a certified production landing zone**. The required path is intended for supported GA features in Azure public cloud. Source review date: **2026-09-10**. Live deployment, regional capacity, end-to-end recovery, and Azure charges have **not** been verified in your subscription. Check the runtime prerequisites before applying anything.
+These are **lab implementation materials, not a certified production landing zone**. The required path is intended for supported GA features in Azure public cloud. Core labs source review: **2026-09-10**; optional KAITO extension: **2026-09-14**. Live deployment, regional capacity, end-to-end recovery, and Azure charges have **not** been verified in your subscription. Check the runtime prerequisites before applying anything.
 
 The sample has **no end-user authentication**. Use only synthetic orders and private access until the restricted public-origin capstone. Workload identity authenticates the application to Azure; it does not authenticate the application's customers. A real customer solution needs end-user/API authentication, authorization, abuse controls, data classification, and its own threat model.
 
@@ -44,6 +45,7 @@ Use a dedicated subscription. Agree the subscription ID, primary and secondary r
 | Extra nodes, NAP comparison, Spot | 6 | Hard-bound load, replica count, and node capacity. Stopping a NAP cluster is unsupported. |
 | Defender, PostgreSQL, disk/file storage, backup | 7-8 | Protection, snapshots, storage, and retained backups can keep costing money after workloads stop. |
 | Second region, Front Door/WAF and Fleet-related resources | 10 | Deploy only for the capstone and remove deliberately afterward. |
+| KAITO GPU inference | 11 (optional) | One desired A100 GPU node; quota/capacity and explicit timed cleanup required. Workspace deletion does not delete GPU node pools. |
 
 Create Azure Cost Management budgets and alerts for the subscription/resource groups before starting. **Budgets are notifications, not spending caps.** See [Azure pricing calculator](https://azure.microsoft.com/pricing/calculator/) using your agreement and regions, and [budget guidance](https://learn.microsoft.com/azure/cost-management-billing/costs/tutorial-acm-create-budgets). No fixed currency estimate is supplied because region, agreement, duration, and traffic dominate it.
 
@@ -92,7 +94,7 @@ The RSA public key supplies the supported node Linux profile; the passphrase-pro
 - `k8s/`: templates for the initial workload, identity mount, and private ingress/network policies.
 - `scripts/`: context, foundation what-if/deployment, manifest rendering and lab certificate generation.
 - `ops/`, `.github/workflows/`, `gitops/`: delivery, monitoring and scaling assets introduced by labs 4-6.
-- `advanced/`: governance, data, upgrade and regional recovery assets introduced by labs 7-10.
+- `advanced/`: governance, data, upgrade and regional recovery assets introduced by labs 7-10, plus the optional lab-11 KAITO manifests.
 - `rendered/`, `evidence/`, `.artifacts/`: local generated output, excluded from Git.
 
 **Ownership changes are explicit.** Labs 1-3 use imperative commands and rendered templates to expose the mechanics. Lab 4 adopts the workload into GitOps. After adoption, change the Git source or explicitly suspend/resume the named Flux reconciliation for a fault exercise. Platform infrastructure stays outside the application's Flux permissions.
@@ -117,6 +119,7 @@ Before lab 8, deduplication is only in memory **per worker process** and disappe
 | Identity | Managed cluster/kubelet identities and Entra Workload ID; no legacy pod identity or stored service-principal secrets. |
 | Operations | Compare AKS Automatic and NAP with manual platform control, including actual limitations and support boundaries. |
 | Multi-cluster | Fleet orchestrates supported cluster operations; it does not replicate application data or replace a regional failover design. |
+| Self-hosted AI | KAITO's managed AKS add-on reconciles model workspaces and GPU capacity; model quality, API security, GPU spend and cleanup remain customer responsibilities. |
 
 References: [AKS baseline](https://learn.microsoft.com/azure/architecture/reference-architectures/containers/aks/baseline-aks), [AKS modes](https://learn.microsoft.com/azure/aks/what-is-aks), [Gateway API](https://learn.microsoft.com/azure/aks/app-routing-gateway-api), [version and OS lifecycle](https://learn.microsoft.com/azure/aks/supported-kubernetes-versions), [NAP](https://learn.microsoft.com/azure/aks/node-auto-provisioning).
 
@@ -124,7 +127,7 @@ References: [AKS baseline](https://learn.microsoft.com/azure/architecture/refere
 
 Save evidence of each lab's exit criteria and Git commit once GitOps exists. Reconnect with `Use-Lab.ps1`, verify the current cluster context, and read the next lab's prerequisites rather than rerunning all bootstrap commands. Remove temporary fault injections before pausing.
 
-Do not delete cumulative resources after individual labs. At final teardown, follow lab 10 and lab 8 cleanup first: remove Fleet membership and global routing, stop/delete backup protection using the documented retention process, remove diagnostic/monitoring associations and external role assignments, and handle database/volume backups intentionally. Inspect every resource group before deletion:
+Do not delete cumulative resources after individual labs. If you ran lab 11, complete its Workspace and GPU-pool cleanup before pausing or final teardown. At final teardown, follow lab 10 and lab 8 cleanup first: remove Fleet membership and global routing, stop/delete backup protection using the documented retention process, remove diagnostic/monitoring associations and external role assignments, and handle database/volume backups intentionally. Inspect every resource group before deletion:
 
 ```powershell
 . .\scripts\Use-Lab.ps1

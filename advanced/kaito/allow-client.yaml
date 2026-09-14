@@ -1,0 +1,39 @@
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: inference-from-probe
+  namespace: kaito-lab
+spec:
+  podSelector:
+    matchLabels:
+      kaito.sh/workspace: kaito-phi4-mini
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              app: inference-probe
+      ports:
+        - protocol: TCP
+          port: 5000
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: probe-to-inference
+  namespace: kaito-lab
+spec:
+  podSelector:
+    matchLabels:
+      app: inference-probe
+  policyTypes:
+    - Egress
+  egress:
+    - to:
+        - podSelector:
+            matchLabels:
+              kaito.sh/workspace: kaito-phi4-mini
+      ports:
+        - protocol: TCP
+          port: 5000
