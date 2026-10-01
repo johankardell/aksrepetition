@@ -1,19 +1,20 @@
 #!/usr/bin/env bash
 set -euo pipefail
 # shellcheck source=../scripts/lib.sh
-source "$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../scripts" && pwd)/lib.sh"
+source "$(cd -- "$(dirname -- "$0")/../scripts" && pwd)/lib.sh"
 
 operation='' recovery_point_id=''
 parse_args "$@"
-case ${operation,,} in
-    configure|backup|restore) operation=${operation,,} ;;
+operation=$(lowercase "$operation")
+case $operation in
+    configure|backup|restore) ;;
     *) die '--operation is required and must be Configure, Backup, or Restore.' ;;
 esac
 if [[ $operation == restore && -z $recovery_point_id ]]; then
     die 'Restore requires a verified successful --recovery-point-id.'
 fi
 # shellcheck source=../scripts/use-lab.sh
-source "$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../scripts" && pwd)/use-lab.sh"
+source "$(cd -- "$(dirname -- "$0")/../scripts" && pwd)/use-lab.sh"
 resource_group=$(lab_value ResourceGroup)
 location=$(lab_value Location)
 prefix=$(lab_value Prefix)
@@ -26,7 +27,7 @@ snapshot_rg="$resource_group-snapshots"
 storage_prefix=${prefix:0:10}
 subscription_hex=${subscription_id//-/}
 storage="${storage_prefix}backup${subscription_hex:0:8}"
-storage=${storage,,}
+storage=$(lowercase "$storage")
 vault_id="/subscriptions/$subscription_id/resourceGroups/$resource_group/providers/Microsoft.DataProtection/backupVaults/$vault"
 config_path="$directory/backup-config.json"
 instance_path="$directory/backup-instance.json"

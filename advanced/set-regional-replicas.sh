@@ -1,14 +1,16 @@
 #!/usr/bin/env bash
 set -euo pipefail
 # shellcheck source=../scripts/lib.sh
-source "$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../scripts" && pwd)/lib.sh"
+source "$(cd -- "$(dirname -- "$0")/../scripts" && pwd)/lib.sh"
 
 directory='./advanced/regions/secondary' api='' worker=''
 parse_args "$@"
 for parameter in api worker; do
-    [[ -n ${!parameter} ]] || die "--$parameter is required."
-    [[ ${!parameter} =~ ^\+?0*([0-9]{1,2})$ ]] || die "--$parameter must be an integer from 0 to 10."
-    value=$((10#${BASH_REMATCH[1]}))
+    value=$(parameter_value "$parameter")
+    [[ -n $value ]] || die "--$parameter is required."
+    [[ $value =~ ^[+]?0*([0-9]{1,2})$ ]] || die "--$parameter must be an integer from 0 to 10."
+    value=${value#+}
+    value=$((10#$value))
     (( value <= 10 )) || die "--$parameter must be an integer from 0 to 10."
     printf -v "$parameter" '%s' "$value"
 done

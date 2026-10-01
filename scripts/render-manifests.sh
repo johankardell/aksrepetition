@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 set -euo pipefail
-source "$(dirname -- "${BASH_SOURCE[0]}")/use-lab.sh"
+source "$(dirname -- "$0")/use-lab.sh"
 (($# == 0)) || die 'render-manifests.sh takes no arguments.'
 destination=$Root/rendered/base
 mkdir -p "$destination"

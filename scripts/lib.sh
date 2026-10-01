@@ -2,6 +2,16 @@
 
 die() { printf '%s\n' "$*" >&2; exit 1; }
 
+parameter_value() {
+    if [[ -n ${ZSH_VERSION:-} ]]; then
+        printf '%s' "${(P)1}"
+    else
+        printf '%s' "${!1}"
+    fi
+}
+
+lowercase() { printf '%s' "$1" | tr '[:upper:]' '[:lower:]'; }
+
 parse_args() {
     local __option __name __value
     while (($#)); do
@@ -19,7 +29,7 @@ parse_args() {
                 shift 2
                 ;;
         esac
-        declare -g "$__name=$__value"
+        typeset -g "$__name=$__value"
     done
 }
 

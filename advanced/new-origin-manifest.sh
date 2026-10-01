@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 # shellcheck source=../scripts/lib.sh
-source "$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../scripts" && pwd)/lib.sh"
+source "$(cd -- "$(dirname -- "$0")/../scripts" && pwd)/lib.sh"
 
 origin_host='' output_directory='' image=''
 parse_args "$@"

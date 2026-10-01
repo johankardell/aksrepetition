@@ -1,12 +1,12 @@
 #!/usr/bin/env bash
 set -euo pipefail
 # shellcheck source=../scripts/lib.sh
-source "$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../scripts" && pwd)/lib.sh"
+source "$(cd -- "$(dirname -- "$0")/../scripts" && pwd)/lib.sh"
 
 resource_group='' location='' name='' resource_id='' group_id='' subnet_id='' vnet_id='' zone_name=''
 parse_args "$@"
 for parameter in resource_group location name resource_id group_id subnet_id vnet_id zone_name; do
-    [[ -n ${!parameter} ]] || die "--${parameter//_/-} is required."
+    [[ -n $(parameter_value "$parameter") ]] || die "--${parameter//_/-} is required."
 done
 
 az network private-dns zone create -g "$resource_group" -n "$zone_name" -o none

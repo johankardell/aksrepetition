@@ -1,14 +1,14 @@
 #!/usr/bin/env bash
 set -euo pipefail
 # shellcheck source=../scripts/lib.sh
-source "$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../scripts" && pwd)/lib.sh"
+source "$(cd -- "$(dirname -- "$0")/../scripts" && pwd)/lib.sh"
 
 host_name='' private_ip=''
 parse_args "$@"
 [[ $host_name =~ ^[a-z0-9.-]+$ ]] || die '--host-name is required and must match ^[a-z0-9.-]+$.'
-[[ $private_ip =~ ^[0-9]{1,3}(\.[0-9]{1,3}){3}$ ]] \
+[[ $private_ip =~ ^[0-9]{1,3}([.][0-9]{1,3}){3}$ ]] \
     || die '--private-ip is required and must be a dotted IPv4 value.'
-root=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)
+root=$(cd -- "$(dirname -- "$0")/.." && pwd)
 directory='./.artifacts/advanced'
 mkdir -p -- "$directory"
 cat > "$directory/database-patch.yaml" <<YAML

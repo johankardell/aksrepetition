@@ -1,28 +1,30 @@
 #!/usr/bin/env bash
 set -euo pipefail
 # shellcheck source=../scripts/lib.sh
-source "$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../scripts" && pwd)/lib.sh"
+source "$(cd -- "$(dirname -- "$0")/../scripts" && pwd)/lib.sh"
 
 output_directory='' registry_server='' image_digest='' service_bus_namespace=''
 api_client_id='' worker_client_id='' postgres_host='' postgres_private_ip=''
 api_role='orders_api_dr' worker_role='orders_worker_dr' api_replicas=0 worker_replicas=0
 parse_args "$@"
 for parameter in output_directory registry_server image_digest service_bus_namespace api_client_id worker_client_id postgres_host postgres_private_ip; do
-    [[ -n ${!parameter} ]] || die "--${parameter//_/-} is required."
+    [[ -n $(parameter_value "$parameter") ]] || die "--${parameter//_/-} is required."
 done
 [[ $image_digest =~ ^sha256:[a-f0-9]{64}$ ]] || die '--image-digest must match ^sha256:[a-f0-9]{64}$.'
 for parameter in registry_server service_bus_namespace api_client_id worker_client_id postgres_host postgres_private_ip api_role worker_role; do
-    value=${!parameter}
+    value=$(parameter_value "$parameter")
     [[ $value != *$'\r'* && $value != *$'\n'* && $value != *"'"* && $value != *'"'* ]] \
         || die 'Use single-line unquoted parameter values.'
 done
 for parameter in api_replicas worker_replicas; do
-    [[ ${!parameter} =~ ^\+?0*([0-9]{1,2})$ ]] || die "--${parameter//_/-} must be an integer from 0 to 10."
-    value=$((10#${BASH_REMATCH[1]}))
+    value=$(parameter_value "$parameter")
+    [[ $value =~ ^[+]?0*([0-9]{1,2})$ ]] || die "--${parameter//_/-} must be an integer from 0 to 10."
+    value=${value#+}
+    value=$((10#$value))
     (( value <= 10 )) || die "--${parameter//_/-} must be an integer from 0 to 10."
     printf -v "$parameter" '%s' "$value"
 done
-root=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)
+root=$(cd -- "$(dirname -- "$0")/.." && pwd)
 python3 - "$root/k8s/base" "$output_directory" "$registry_server" "$service_bus_namespace" "$api_client_id" "$worker_client_id" <<'PY'
 import json
 import pathlib

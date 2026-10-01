@@ -16,8 +16,10 @@ ADMIN = "33333333-3333-3333-3333-333333333333"
 
 
 class BashHelpersTests(unittest.TestCase):
+    shell = "bash"
+
     def setUp(self):
-        self.temporary = tempfile.TemporaryDirectory()
+        self.temporary = tempfile.TemporaryDirectory(prefix="shell helpers ")
         self.addCleanup(self.temporary.cleanup)
         self.root = pathlib.Path(self.temporary.name)
         for directory in ("scripts", "ops", "advanced", "k8s", "infra", "gitops"):
@@ -58,6 +60,10 @@ elif args[:3] == ["deployment", "group", "show"]:
         print((root / "outputs.json").read_text())
 elif args[:2] == ["acr", "login"]:
     print(json.dumps({"loginServer": os.environ.get("TEST_REGISTRY", "testregistry.azurecr.io"), "accessToken": "synthetic-test-token"}))
+elif args[:4] == ["monitor", "log-analytics", "workspace", "show"]:
+    print("synthetic-workspace")
+elif args[:1] == ["rest"]:
+    print(args[args.index("--body") + 1])
 elif args[:3] in (["deployment", "group", "what-if"], ["deployment", "group", "create"]):
     pass
 else:
@@ -88,7 +94,7 @@ print("offline render")
         path.chmod(0o755)
 
     def run_script(self, script, *args, input=None, success=True):
-        result = subprocess.run(["bash", str(self.root / script), *args],
+        result = subprocess.run([self.shell, str(self.root / script), *args],
                                 cwd=self.root, env=self.env, input=input,
                                 text=True, capture_output=True)
         if success:
@@ -99,12 +105,81 @@ print("offline render")
 
     def test_loading_context_and_generated_names(self):
         result = subprocess.run(
-            ["bash", "-c", 'source scripts/use-lab.sh; lab_value KeyVaultName; output_value apiClientId'],
+            ["bash", "-c", (
+                'set +e +u +o pipefail; source scripts/use-lab.sh; '
+                '[[ $- != *e* && $- != *u* ]]; [[ $(set -o | awk \'$1 == "pipefail" {print $2}\') == off ]]; '
+                'lab_value KeyVaultName; output_value apiClientId'
+            )],
             cwd=self.root, env=self.env, text=True, capture_output=True)
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(result.stdout.splitlines(), ["generated-vault", "api-client"])
         self.env["TEST_SUBSCRIPTION"] = ADMIN
         self.run_script("scripts/use-lab.sh", success=False)
+
+    @unittest.skipUnless(shutil.which("zsh"), "Zsh is not installed")
+    def test_zsh_loading_preserves_options_and_accessors_after_changing_directory(self):
+        for no_foundation in ("0", "1"):
+            with self.subTest(no_foundation=no_foundation):
+                self.env["TEST_NO_FOUNDATION"] = no_foundation
+                result = subprocess.run(
+                    ["zsh", "-f", "-c", (
+                        'setopt nounset pipefail shwordsplit; before=$(set +o); '
+                        'source "$TEST_ROOT/scripts/use-lab.sh" || exit; '
+                        '[[ $(set +o) == "$before" ]] || exit 9; '
+                        '[[ $Root == "$TEST_ROOT" ]] || exit 8; '
+                        'cd /; lab_value ClusterName; '
+                        'if [[ $Outputs == "{}" ]]; then printf "{}\\n"; '
+                        'else lab_value KeyVaultName; output_value apiClientId; fi'
+                    )],
+                    cwd=self.root / "scripts", env=self.env, text=True, capture_output=True)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                expected = (["testlab-aks", "{}"] if no_foundation == "1"
+                            else ["testlab-aks", "generated-vault", "api-client"])
+                self.assertEqual(result.stdout.splitlines(), expected)
+
+    def test_sourcing_errors_preserve_state_and_options_in_supported_shells(self):
+        for shell in ("bash", "zsh"):
+            if not shutil.which(shell):
+                continue
+            for failure in ("prefix", "azure", "context", "missing", "json"):
+                with self.subTest(shell=shell, failure=failure):
+                    settings = dict(self.settings)
+                    if failure == "prefix":
+                        settings["Prefix"] = "REPLACE"
+                    settings_path = self.root / "local.settings.json"
+                    settings_path.write_text("{" if failure == "json" else json.dumps(settings))
+                    if failure == "missing":
+                        settings_path.unlink()
+                    env = dict(self.env, TEST_AZ_FAIL="1" if failure == "azure" else "0",
+                               TEST_SUBSCRIPTION=ADMIN if failure == "context" else SUBSCRIPTION)
+                    result = subprocess.run(
+                        [shell, "-c", (
+                            'set +e; Root=old-root; Lab=old-lab; Outputs=old-outputs; '
+                            'before=$(set +o); source ./scripts/use-lab.sh; result=$?; '
+                            '[[ $(set +o) == "$before" ]] || exit 9; '
+                            '[[ $Root == old-root && $Lab == old-lab && $Outputs == old-outputs ]] || exit 8; '
+                            'printf "status=%s alive=yes\\n" "$result"'
+                        )],
+                        cwd=self.root, env=env, text=True, capture_output=True)
+                    self.assertEqual(result.returncode, 0, result.stderr)
+                    self.assertEqual(result.stdout, "status=1 alive=yes\n")
+                    self.assertTrue(result.stderr)
+
+    def test_invalid_settings_return_without_exiting_calling_shell(self):
+        self.settings["Prefix"] = "REPLACE"
+        (self.root / "local.settings.json").write_text(json.dumps(self.settings))
+        result = subprocess.run(
+            ["bash", "-c", (
+                'set +e +u +o pipefail; source scripts/use-lab.sh; status=$?; '
+                'printf "status=%s alive=yes errexit=%s nounset=%s pipefail=%s\\n" '
+                '"$status" "$([[ $- == *e* ]] && echo on || echo off)" '
+                '"$([[ $- == *u* ]] && echo on || echo off)" '
+                '"$(set -o | awk \'$1 == "pipefail" {print $2}\')"'
+            )],
+            cwd=self.root, env=self.env, text=True, capture_output=True)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("Prefix must be 4-12", result.stderr)
+        self.assertEqual(result.stdout, "status=1 alive=yes errexit=off nounset=off pipefail=off\n")
 
     def test_invalid_namespace_fails_before_azure(self):
         self.settings["Namespace"] = "other"
@@ -141,6 +216,37 @@ print("offline render")
         for args in (("--unknown", "value"), ("--registry-name",), ("--name", "unexpected")):
             self.run_script("scripts/connect-acr-podman.sh", *args, success=False)
         self.assertFalse((self.root / "az-calls.jsonl").exists())
+
+    def test_flux_images_are_mirrored_once_each(self):
+        images = [f"ghcr.io/fluxcd/{name}:v1" for name in (
+            "source-controller", "kustomize-controller", "helm-controller", "notification-controller")]
+        self.mock(self.root / "bin/flux", """#!/usr/bin/env python3
+import json, os, sys
+assert sys.argv[1:] == ["install", "--export"]
+print(os.environ["TEST_FLUX_MANIFEST"])
+""")
+        self.mock(self.root / "bin/podman", """#!/usr/bin/env python3
+import json, os, pathlib, sys
+with (pathlib.Path(os.environ["TEST_ROOT"]) / "mirror-calls.jsonl").open("a") as file:
+    file.write(json.dumps(sys.argv[1:]) + "\\n")
+""")
+        self.env["TEST_FLUX_MANIFEST"] = "\n".join(images + images[:1])
+        self.run_script("ops/mirror-flux-images.sh", "--registry-server", "testregistry.azurecr.io")
+        calls = [json.loads(line) for line in (self.root / "mirror-calls.jsonl").read_text().splitlines()]
+        expected = []
+        for image in sorted(images):
+            target = image.replace("ghcr.io", "testregistry.azurecr.io")
+            expected.extend([["pull", image], ["tag", image, target], ["push", target]])
+        self.assertEqual(calls, expected)
+        (self.root / "mirror-calls.jsonl").unlink()
+        self.env["TEST_FLUX_MANIFEST"] = images[0]
+        self.run_script("ops/mirror-flux-images.sh", "--registry-server", "testregistry.azurecr.io", success=False)
+        self.assertFalse((self.root / "mirror-calls.jsonl").exists())
+
+    def test_log_query_keeps_query_literal_and_default_timespan(self):
+        query = "Usage | where TimeGenerated > ago(24h)"
+        result = self.run_script("ops/invoke-logs-query.sh", "--query", query)
+        self.assertEqual(json.loads(result.stdout), {"query": query, "timespan": "PT1H"})
 
     def test_render_and_one_shot_gitops_adoption(self):
         self.run_script("scripts/render-manifests.sh")
@@ -198,6 +304,11 @@ print("offline render")
         self.assertFalse(any(call[:3] == ["deployment", "group", "create"] for call in calls))
         self.run_script("scripts/deploy-foundation.sh", "--apply", success=False)
         self.run_script("scripts/deploy-foundation.sh", "--apply", "--confirm", input="wrong-group\n", success=False)
+        self.run_script("scripts/deploy-foundation.sh", "--apply", "--confirm", input="test-rg\n")
+        calls = [json.loads(line) for line in (self.root / "az-calls.jsonl").read_text().splitlines()]
+        self.assertEqual(sum(call[:3] == ["deployment", "group", "create"] for call in calls), 1)
+        what_if = next(call for call in calls if call[:3] == ["deployment", "group", "what-if"])
+        self.assertIn("sshPublicKey=ssh-rsa synthetic-public-key", what_if)
 
     @unittest.skipUnless(shutil.which("openssl"), "OpenSSL required")
     def test_certificate_contains_hostname_and_private_key_permissions(self):
@@ -237,6 +348,11 @@ print("offline render")
             self.assertEqual({row["status"] for row in report["requests"]}, {expected})
             self.assertEqual(report["availabilityPercent"], 100 if expected == 202 else 0)
         self.run_script("ops/invoke-order-load.sh", "--base-uri", uri, "--count", "2001", success=False)
+
+
+@unittest.skipUnless(shutil.which("zsh"), "Zsh is not installed")
+class ZshHelpersTests(BashHelpersTests):
+    shell = "zsh"
 
 
 if __name__ == "__main__":

@@ -134,6 +134,8 @@ class Handler(http.server.BaseHTTPRequestHandler):
 
 @unittest.skipUnless(shutil.which("bash") and shutil.which("jq"), "Bash and jq required")
 class AdvancedHelpersTests(unittest.TestCase):
+    shell = "bash"
+
     @classmethod
     def setUpClass(cls):
         cls.server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Handler)
@@ -145,7 +147,7 @@ class AdvancedHelpersTests(unittest.TestCase):
         cls.uri = f"http://127.0.0.1:{cls.server.server_port}"
 
     def setUp(self):
-        self.temp = tempfile.TemporaryDirectory(prefix="advanced-offline-")
+        self.temp = tempfile.TemporaryDirectory(prefix="advanced offline ")
         self.addCleanup(self.temp.cleanup)
         self.root = Path(self.temp.name)
         for directory in ("advanced", "scripts", "ops", "bin"):
@@ -155,7 +157,7 @@ class AdvancedHelpersTests(unittest.TestCase):
         shutil.copy2(REPO / "scripts/lib.sh", self.root / "scripts/lib.sh")
         shutil.copytree(REPO / "k8s/base", self.root / "k8s/base")
         (self.root / "scripts/use-lab.sh").write_text('''#!/usr/bin/env bash
-Root=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)
+Root=$MOCK_ROOT
 Lab='{"ResourceGroup":"lab-rg","Location":"eastus","Prefix":"abcdefghijkl","SubscriptionId":"12345678-1234-1234-1234-123456789abc","ClusterName":"abcdefghijkl-aks"}'
 Outputs='{"endpointsSubnetId":{"value":"/network/endpoints"},"vnetId":{"value":"/network/vnet"},"clusterId":{"value":"/clusters/aks"}}'
 lab_value() { jq -er --arg key "$1" '.[$key]' <<< "$Lab"; }
@@ -170,7 +172,8 @@ output_value() { jq -er --arg key "$1" '.[$key].value' <<< "$Outputs"; }
                     if not key.startswith("MOCK_") and key.lower() not in
                     ("http_proxy", "https_proxy", "all_proxy", "no_proxy")}
         self.env.update(PATH=str(self.root / "bin") + ":" + os.environ.get("PATH", os.defpath),
-                        MOCK_LOG=str(self.root / "calls.jsonl"), REAL_KUBECTL=REAL_KUBECTL or "",
+                        MOCK_ROOT=str(self.root), MOCK_LOG=str(self.root / "calls.jsonl"),
+                        REAL_KUBECTL=REAL_KUBECTL or "",
                         NO_PROXY="127.0.0.1,localhost", no_proxy="127.0.0.1,localhost",
                         SSL_CERT_FILE="", CURL_CA_BUNDLE="")
         Handler.seen = []
@@ -181,7 +184,7 @@ output_value() { jq -er --arg key "$1" '.[$key].value' <<< "$Outputs"; }
         Handler.actual_id = None
 
     def run_script(self, script, args=(), success=True, input="", **env):
-        result = subprocess.run(["bash", str(self.root / "advanced" / (script + ".sh")), *args],
+        result = subprocess.run([self.shell, str(self.root / "advanced" / (script + ".sh")), *args],
                                 cwd=self.root, env=dict(self.env, **env), input=input,
                                 text=True, capture_output=True, timeout=30)
         if success:
@@ -548,6 +551,11 @@ replicas:
             self.run_script("test-order-ledger", ledger_args, **env)
             report = json.loads((self.root / "tls-report.json").read_text())
             self.assertEqual(report["unverified"], 0)
+
+
+@unittest.skipUnless(shutil.which("zsh"), "Zsh is not installed")
+class ZshAdvancedHelpersTests(AdvancedHelpersTests):
+    shell = "zsh"
 
 
 if __name__ == "__main__":

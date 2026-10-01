@@ -1,13 +1,13 @@
 #!/usr/bin/env bash
 set -euo pipefail
 # shellcheck source=../scripts/lib.sh
-source "$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../scripts" && pwd)/lib.sh"
+source "$(cd -- "$(dirname -- "$0")/../scripts" && pwd)/lib.sh"
 
 host_name='' admin_login='' api_principal_id='' worker_principal_id=''
 api_role='orders_api' worker_role='orders_worker'
 parse_args "$@"
 for parameter in host_name admin_login api_principal_id worker_principal_id; do
-    [[ -n ${!parameter} ]] || die "--${parameter//_/-} is required."
+    [[ -n $(parameter_value "$parameter") ]] || die "--${parameter//_/-} is required."
 done
 [[ $api_principal_id =~ ^[0-9a-fA-F-]{36}$ && $worker_principal_id =~ ^[0-9a-fA-F-]{36}$ ]] \
     || die 'Principal IDs must match ^[0-9a-fA-F-]{36}$.'

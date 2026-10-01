@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 set -euo pipefail
-source "$(dirname -- "${BASH_SOURCE[0]}")/../scripts/use-lab.sh"
+source "$(dirname -- "$0")/../scripts/use-lab.sh"
 (($# == 0)) || die 'initialize-gitops.sh takes no arguments.'
 destination=$Root/gitops/clusters/primary
 [[ ! -f $destination/apps/orders/kustomization.yaml ]] || die 'GitOps is already initialized. Edit its sources; do not recopy rendered manifests.'

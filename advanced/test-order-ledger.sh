@@ -1,14 +1,15 @@
 #!/usr/bin/env bash
 set -euo pipefail
 # shellcheck source=../scripts/lib.sh
-source "$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../scripts" && pwd)/lib.sh"
+source "$(cd -- "$(dirname -- "$0")/../scripts" && pwd)/lib.sh"
 
 base_uri='' ledger_path='./.artifacts/advanced/dr-accepted.json'
 timeout_seconds=180 report_path='./.artifacts/advanced/order-verification.json'
 parse_args "$@"
 [[ -n $base_uri ]] || die '--base-uri is required.'
-[[ $timeout_seconds =~ ^\+?0*([0-9]{1,4})$ ]] || die '--timeout-seconds must be an integer from 1 to 3600.'
-timeout_seconds=$((10#${BASH_REMATCH[1]}))
+[[ $timeout_seconds =~ ^[+]?0*([0-9]{1,4})$ ]] || die '--timeout-seconds must be an integer from 1 to 3600.'
+timeout_seconds=${timeout_seconds#+}
+timeout_seconds=$((10#$timeout_seconds))
 (( timeout_seconds >= 1 && timeout_seconds <= 3600 )) || die '--timeout-seconds must be an integer from 1 to 3600.'
 python3 - "$base_uri" "$ledger_path" "$timeout_seconds" "$report_path" <<'PY'
 import datetime

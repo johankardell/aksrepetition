@@ -1,5 +1,6 @@
 import pathlib
 import re
+import shutil
 import subprocess
 import unittest
 
@@ -38,8 +39,10 @@ class LabCommandsTests(unittest.TestCase):
         for directory in ("scripts", "ops", "advanced"):
             for path in (ROOT / directory).glob("*.sh"):
                 with self.subTest(script=path.relative_to(ROOT)):
-                    result = subprocess.run(["bash", "-n", str(path)], text=True, capture_output=True)
-                    self.assertEqual(result.returncode, 0, result.stderr)
+                    for shell in ("bash", "zsh"):
+                        if shutil.which(shell):
+                            result = subprocess.run([shell, "-n", str(path)], text=True, capture_output=True)
+                            self.assertEqual(result.returncode, 0, result.stderr)
                     for block in re.findall(r"<<'PY'\n(.*?)\nPY", path.read_text(), re.S):
                         compile(block, str(path), "exec")
 

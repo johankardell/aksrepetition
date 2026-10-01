@@ -1,14 +1,14 @@
 #!/usr/bin/env bash
 set -euo pipefail
-source "$(dirname -- "${BASH_SOURCE[0]}")/../scripts/lib.sh"
+source "$(dirname -- "$0")/../scripts/lib.sh"
 source='' kind=Resource namespace=orders
 parse_args "$@"
 require_value source "$source"
 validate_namespace "$namespace"
 [[ $kind == Resource || $kind == Patch ]] || die '--kind must be Resource or Patch.'
-root=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)/gitops/clusters/primary/apps/$namespace
+root=$(cd -- "$(dirname -- "$0")/.." && pwd)/gitops/clusters/primary/apps/$namespace
 name=$(basename -- "$source")
-[[ $name =~ ^[a-zA-Z0-9][a-zA-Z0-9.-]*\.yaml$ ]] || die 'Supply a YAML filename without directory traversal.'
+[[ $name =~ ^[a-zA-Z0-9][a-zA-Z0-9.-]*[.]yaml$ ]] || die 'Supply a YAML filename without directory traversal.'
 cp -- "$source" "$root/$name"
 python3 - "$root/kustomization.yaml" "$name" "$kind" <<'PY'
 import pathlib, re, sys

@@ -1,13 +1,14 @@
 #!/usr/bin/env bash
 set -euo pipefail
 # shellcheck source=../scripts/lib.sh
-source "$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../scripts" && pwd)/lib.sh"
+source "$(cd -- "$(dirname -- "$0")/../scripts" && pwd)/lib.sh"
 
 base_uri='' seconds=600 output_path='./.artifacts/advanced/traffic.json'
 parse_args "$@"
 [[ -n $base_uri ]] || die '--base-uri is required.'
-[[ $seconds =~ ^\+?0*([0-9]{1,4})$ ]] || die '--seconds must be an integer from 1 to 7200.'
-seconds=$((10#${BASH_REMATCH[1]}))
+[[ $seconds =~ ^[+]?0*([0-9]{1,4})$ ]] || die '--seconds must be an integer from 1 to 7200.'
+seconds=${seconds#+}
+seconds=$((10#$seconds))
 (( seconds >= 1 && seconds <= 7200 )) || die '--seconds must be an integer from 1 to 7200.'
 python3 - "$base_uri" "$seconds" "$output_path" <<'PY'
 import datetime

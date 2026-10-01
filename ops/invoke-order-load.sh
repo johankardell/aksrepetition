@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 set -euo pipefail
-source "$(dirname -- "${BASH_SOURCE[0]}")/../scripts/lib.sh"
+source "$(dirname -- "$0")/../scripts/lib.sh"
 base_uri='' count=100 concurrency=4 duration_seconds=120 timeout_seconds=10 delay_milliseconds=100
 operation=PostOrders output_path=.artifacts/order-load.json
 parse_args "$@"

@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 # shellcheck source=../scripts/lib.sh
-source "$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../scripts" && pwd)/lib.sh"
+source "$(cd -- "$(dirname -- "$0")/../scripts" && pwd)/lib.sh"
 
 message=''
 parse_args "$@"
@@ -24,7 +24,7 @@ url=$(gh pr create --base main --head "$branch" --fill)
 printf 'Review through your normal protected-branch process: %s\n' "$url"
 while true; do
     printf '%s' 'After the approved PR is merged, press Enter to continue; type stop to leave it pending: '
-    if ! IFS= read -r answer || [[ ${answer,,} == stop ]]; then
+    if ! IFS= read -r answer || [[ $(lowercase "$answer") == stop ]]; then
         die "Review left pending at $url. Do not reconcile or promote data until the change is merged."
     fi
     state=$(gh pr view "$url" --json state --jq .state)
