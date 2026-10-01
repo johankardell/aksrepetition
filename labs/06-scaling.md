@@ -2,7 +2,7 @@
 
 **Scenario.** Interactive traffic needs ready API capacity; queued work can wait briefly and scale to zero. Demonstrate the different control loops, enforce bounds, and expose the boundary between retryable delivery and durable idempotency.
 
-**Prerequisites/re-entry.** Complete labs 1–5, with healthy GitOps and observable API/worker traffic. Use PowerShell 7 on the private management host. Human platform access must permit add-on/pool configuration, managed-identity federation and queue-scoped role assignment. Never give these rights to the image publisher. The GA AKS Kubernetes version determines the supported managed KEDA version; do not install another KEDA Helm release.
+**Prerequisites/re-entry.** Complete labs 1–5, with healthy GitOps and observable API/worker traffic. Use Bash on the private Linux management host with the Lab 5 tools (`jq`, `curl`, `python3`, `openssl` and the Azure/Kubernetes/Git CLIs). Start each terminal with `set -euo pipefail`; continue in the same terminal unless stated otherwise. Human platform access must permit add-on/pool configuration, managed-identity federation and queue-scoped role assignment. Never give these rights to the image publisher. The GA AKS Kubernetes version determines the supported managed KEDA version; do not install another KEDA Helm release. On re-entry, source `use-lab.sh`, reload the scaling outputs/client ID from directive 2, and set the trusted HTTPS URL again.
 
 **Architecture/ownership.** HPA controls `order-api` replicas from Metrics Server CPU; KEDA creates/owns the worker's HPA from queue length and activates it from zero. Cluster autoscaler (CA) adds/removes nodes for **unschedulable requested capacity**, not utilization alone. Flux owns autoscaler specifications and pod templates but **not Deployment replicas** after directive 3. KEDA polls Service Bus using its own operator service account's federation; the workload's federation alone is insufficient.
 
@@ -23,15 +23,16 @@
 <details>
 <summary>Solution</summary>
 
-```powershell
-. .\scripts\Use-Lab.ps1
+```bash
+set -euo pipefail
+source ./scripts/use-lab.sh
 flux get kustomizations
 kubectl -n orders get deployments,hpa
 kubectl -n orders top pods --containers
-az aks nodepool list -g $Lab.ResourceGroup --cluster-name $Lab.ClusterName `
+az aks nodepool list -g "$(lab_value ResourceGroup)" --cluster-name "$(lab_value ClusterName)" \
   --query '[].{name:name,mode:mode,size:vmSize,count:count,min:minCount,max:maxCount,autoscaler:enableAutoScaling}' -o table
-az vm list-usage --location $Lab.Location -o table
-az aks show -g $Lab.ResourceGroup -n $Lab.ClusterName `
+az vm list-usage --location "$(lab_value Location)" -o table
+az aks show -g "$(lab_value ResourceGroup)" -n "$(lab_value ClusterName)" \
   --query '{version:kubernetesVersion,keda:workloadAutoScalerProfile.keda,oidc:oidcIssuerProfile.issuerUrl,workloadIdentity:securityProfile.workloadIdentity}' -o json
 ```
 
@@ -52,15 +53,15 @@ Compare quota usage plus the permitted extra node vCPUs with both total regional
 <details>
 <summary>Solution</summary>
 
-```powershell
-az aks update -g $Lab.ResourceGroup -n $Lab.ClusterName --enable-keda
-az deployment group create -g $Lab.ResourceGroup -n scaling-identity `
-  --template-file .\ops\scaling-identity.bicep `
-  --parameters scalerIdentityName="$($Lab.Prefix)-scaler" serviceBusName=$Lab.ServiceBusName `
-    location=$Lab.Location oidcIssuer=$Outputs.oidcIssuer.value
-$Scaling = az deployment group show -g $Lab.ResourceGroup -n scaling-identity --query properties.outputs -o json | ConvertFrom-Json
-$ScalerClientId = $Scaling.scalerClientId.value
-kubectl -n kube-system annotate serviceaccount keda-operator `
+```bash
+az aks update -g "$(lab_value ResourceGroup)" -n "$(lab_value ClusterName)" --enable-keda
+az deployment group create -g "$(lab_value ResourceGroup)" -n scaling-identity \
+  --template-file ./ops/scaling-identity.bicep \
+  --parameters scalerIdentityName="$(lab_value Prefix)-scaler" serviceBusName="$(lab_value ServiceBusName)" \
+    location="$(lab_value Location)" oidcIssuer="$(output_value oidcIssuer)"
+Scaling=$(az deployment group show -g "$(lab_value ResourceGroup)" -n scaling-identity --query properties.outputs -o json)
+ScalerClientId=$(jq -er '.scalerClientId.value' <<< "$Scaling")
+kubectl -n kube-system annotate serviceaccount keda-operator \
   "azure.workload.identity/client-id=$ScalerClientId" --overwrite
 kubectl -n kube-system rollout restart deployment/keda-operator
 kubectl -n kube-system rollout status deployment/keda-operator --timeout=300s
@@ -70,9 +71,9 @@ kubectl -n kube-system get pods -l app.kubernetes.io/name=keda-operator
 
 Inspect the operator pod, not its Secret values:
 
-```powershell
-$KedaPod = kubectl -n kube-system get pods -l app.kubernetes.io/name=keda-operator -o 'jsonpath={.items[0].metadata.name}'
-kubectl -n kube-system describe pod $KedaPod
+```bash
+KedaPod=$(kubectl -n kube-system get pods -l app.kubernetes.io/name=keda-operator -o 'jsonpath={.items[0].metadata.name}')
+kubectl -n kube-system describe pod "$KedaPod"
 ```
 
 **Evidence:** supported managed KEDA image, `azure.workload.identity/use` pod label, projected token volume and `AZURE_FEDERATED_TOKEN_FILE` environment variable. Do not print token contents. If missing, verify Workload ID was enabled **before** the add-on and restart the operator after annotating it. Confirm subject `system:serviceaccount:kube-system:keda-operator`, issuer and audience. Operator administration belongs to the platform, not application Flux.
@@ -92,23 +93,30 @@ The published Microsoft KEDA example uses **Azure Service Bus Data Owner** for r
 <details>
 <summary>Solution</summary>
 
-```powershell
-$OrdersPath = '.\gitops\clusters\primary\apps\orders'
-foreach ($file in 'api.yaml','worker.yaml') {
-    $path = Join-Path $OrdersPath $file
-    $text = Get-Content $path -Raw
-    $text = $text -replace '(?m)^  replicas: \d+\s*\r?$', ''
-    Set-Content $path $text -Encoding utf8
-}
-New-Item .artifacts\scaling -ItemType Directory -Force | Out-Null
-$scaled = (Get-Content .\ops\scaling\worker-keda.yaml -Raw).
-  Replace('__SCALER_CLIENT_ID__',$ScalerClientId).
-  Replace('__SERVICEBUS_NAME__',$Lab.ServiceBusName)
-Set-Content .artifacts\scaling\worker-keda.yaml $scaled -Encoding utf8
-.\ops\Add-GitOpsFile.ps1 -Source .\ops\scaling\api-hpa.yaml
-.\ops\Add-GitOpsFile.ps1 -Source .artifacts\scaling\worker-keda.yaml
-.\ops\Add-GitOpsFile.ps1 -Source .\ops\scaling\worker-delay-patch.yaml -Kind Patch
-kubectl kustomize $OrdersPath
+```bash
+OrdersPath=./gitops/clusters/primary/apps/orders
+python3 - "$OrdersPath" "$ScalerClientId" "$(lab_value ServiceBusName)" <<'PY'
+from pathlib import Path
+import re
+import sys
+
+orders, client_id, service_bus = sys.argv[1:]
+for name in ("api.yaml", "worker.yaml"):
+    path = Path(orders) / name
+    text = re.sub(r"(?m)^  replicas: \d+[ \t]*\r?\n?", "", path.read_text())
+    path.write_text(text)
+destination = Path(".artifacts/scaling")
+destination.mkdir(parents=True, exist_ok=True)
+scaled = Path("ops/scaling/worker-keda.yaml").read_text()
+scaled = scaled.replace("__SCALER_CLIENT_ID__", client_id).replace("__SERVICEBUS_NAME__", service_bus)
+if re.search(r"__[A-Z0-9_]+__", scaled):
+    raise SystemExit("Unresolved KEDA manifest token.")
+(destination / "worker-keda.yaml").write_text(scaled)
+PY
+bash ./ops/add-gitops-file.sh --source ./ops/scaling/api-hpa.yaml
+bash ./ops/add-gitops-file.sh --source .artifacts/scaling/worker-keda.yaml
+bash ./ops/add-gitops-file.sh --source ./ops/scaling/worker-delay-patch.yaml --kind Patch
+kubectl kustomize "$OrdersPath"
 git switch -c enable-bounded-scaling
 git add gitops
 git commit -m "Transfer replicas to HPA and KEDA with explicit limits"
@@ -118,7 +126,7 @@ gh pr create --base main --fill
 
 Review/merge, then:
 
-```powershell
+```bash
 git switch main
 git pull --ff-only
 flux reconcile kustomization orders --with-source
@@ -146,25 +154,28 @@ Flux must no longer reconcile `spec.replicas`. Watch after several reconciliatio
 
 Use the real HTTPS application URL from Lab 3:
 
-```powershell
-$UserUri = (Read-Host 'Trusted HTTPS application URL').TrimEnd('/')
-$BeforeApi = kubectl -n orders get deployment order-api -o 'jsonpath={.spec.replicas}'
-$BeforeApi
+```bash
+read -r -p 'Trusted HTTPS application URL: ' UserUri
+UserUri=${UserUri%/}
+[[ "$UserUri" == https://* ]] || { printf '%s\n' 'Use the trusted HTTPS application URL.' >&2; exit 1; }
+BeforeApi=$(kubectl -n orders get deployment order-api -o 'jsonpath={.spec.replicas}')
+printf '%s\n' "$BeforeApi"
 ```
 
 In a second private-management terminal, create 180 seconds of CPU work inside **one** API container:
 
-```powershell
-$pod = kubectl -n orders get pods -l app=order-api -o 'jsonpath={.items[0].metadata.name}'
-kubectl -n orders exec $pod -c api -- python -c `
+```bash
+set -euo pipefail
+pod=$(kubectl -n orders get pods -l app=order-api -o 'jsonpath={.items[0].metadata.name}')
+kubectl -n orders exec "$pod" -c api -- python -c \
   "import time; end=time.monotonic()+180; exec('while time.monotonic()<end:\n sum(range(10000))')"
 ```
 
 In the first:
 
-```powershell
-.\ops\Invoke-OrderLoad.ps1 -BaseUri $UserUri -Operation Browse -Count 800 `
-  -Concurrency 4 -DurationSeconds 180 -DelayMilliseconds 500 -OutputPath .artifacts\hpa-impact.json
+```bash
+bash ./ops/invoke-order-load.sh --base-uri "$UserUri" --operation Browse --count 800 \
+  --concurrency 4 --duration-seconds 180 --delay-milliseconds 500 --output-path .artifacts/hpa-impact.json
 kubectl -n orders get hpa order-api
 kubectl -n orders describe hpa order-api
 kubectl -n orders top pods --containers
@@ -188,16 +199,16 @@ Observe `kubectl -n orders get hpa order-api` and container CPU from another ter
 <details>
 <summary>Solution</summary>
 
-```powershell
-.\ops\Invoke-OrderLoad.ps1 -BaseUri $UserUri -Count 150 -Concurrency 6 `
-  -DurationSeconds 60 -DelayMilliseconds 20 -OutputPath .artifacts\keda-load.json
-for ($i=0; $i -lt 20; $i++) {
+```bash
+bash ./ops/invoke-order-load.sh --base-uri "$UserUri" --count 150 --concurrency 6 \
+  --duration-seconds 60 --delay-milliseconds 20 --output-path .artifacts/keda-load.json
+for ((i=0; i<20; i++)); do
     kubectl -n orders get scaledobject order-worker
     kubectl -n orders get deployment order-worker
-    az servicebus queue show -g $Lab.ResourceGroup --namespace-name $Lab.ServiceBusName `
+    az servicebus queue show -g "$(lab_value ResourceGroup)" --namespace-name "$(lab_value ServiceBusName)" \
       --name orders --query '{active:countDetails.activeMessageCount,deadletter:countDetails.deadLetterMessageCount}' -o json
-    Start-Sleep -Seconds 15
-}
+    sleep 15
+done
 kubectl -n orders get hpa
 ```
 
@@ -205,7 +216,7 @@ kubectl -n orders get hpa
 
 Do not interpret empty queue as durable order fulfillment before Lab 8. Rejected/dead-lettered messages can empty it too. Compare accepted count, processed synthetic IDs and dead-letter delta. If workload throughput is already high enough that backlog barely grows, the configured two-second delay should make the 150-message exercise observable; verify that patch is active before generating more messages.
 
-Capture worker logs while replicas are active; logs from scaled-to-zero pods must be queried through the Lab 5 log workspace. Use `.artifacts\keda-load.json` request IDs to identify this run rather than treating all queue activity as yours. A short backlog can trigger only a small replica increase; activation, healthy scaling and eventual drain within the cap are the required observations, not necessarily all five workers.
+Capture worker logs while replicas are active; logs from scaled-to-zero pods must be queried through the Lab 5 log workspace. Use `.artifacts/keda-load.json` request IDs (`jq -r '.requests[].id' .artifacts/keda-load.json`) to identify this run rather than treating all queue activity as yours. A short backlog can trigger only a small replica increase; activation, healthy scaling and eventual drain within the cap are the required observations, not necessarily all five workers.
 
 </details>
 
@@ -222,24 +233,34 @@ The foundation starts with three apps nodes; this exercise allows two to four. C
 <details>
 <summary>Solution</summary>
 
-```powershell
-$pool = az aks nodepool show -g $Lab.ResourceGroup --cluster-name $Lab.ClusterName -n apps -o json | ConvertFrom-Json
-if ($pool.enableAutoScaling) {
-    az aks nodepool update -g $Lab.ResourceGroup --cluster-name $Lab.ClusterName -n apps `
+```bash
+pool=$(az aks nodepool show -g "$(lab_value ResourceGroup)" --cluster-name "$(lab_value ClusterName)" -n apps -o json)
+if [[ "$(jq -r '.enableAutoScaling' <<< "$pool")" == true ]]; then
+    az aks nodepool update -g "$(lab_value ResourceGroup)" --cluster-name "$(lab_value ClusterName)" -n apps \
       --update-cluster-autoscaler --min-count 2 --max-count 4
-} else {
-    az aks nodepool update -g $Lab.ResourceGroup --cluster-name $Lab.ClusterName -n apps `
+else
+    az aks nodepool update -g "$(lab_value ResourceGroup)" --cluster-name "$(lab_value ClusterName)" -n apps \
       --enable-cluster-autoscaler --min-count 2 --max-count 4
-}
-$ImageReference = kubectl -n orders get deployment order-api -o 'jsonpath={.spec.template.spec.containers[0].image}'
-$job = (Get-Content .\ops\scaling\capacity-job.yaml -Raw).Replace('__IMAGE_REFERENCE__',$ImageReference)
-$job | kubectl apply -f -
-for ($i=0; $i -lt 20; $i++) {
+fi
+ImageReference=$(kubectl -n orders get deployment order-api -o 'jsonpath={.spec.template.spec.containers[0].image}')
+python3 - "$ImageReference" <<'PY' | kubectl apply -f -
+from pathlib import Path
+import re
+import sys
+text = Path("ops/scaling/capacity-job.yaml").read_text().replace("__IMAGE_REFERENCE__", sys.argv[1])
+if re.search(r"__[A-Z0-9_]+__", text):
+    raise SystemExit("Unresolved capacity-job token.")
+print(text)
+PY
+for ((i=0; i<20; i++)); do
     kubectl get nodes -l agentpool=apps
     kubectl -n orders get pods -l job-name=bounded-capacity
-    Start-Sleep -Seconds 20
-}
-kubectl -n orders get events --sort-by=.lastTimestamp | Select-String 'TriggeredScaleUp|FailedScheduling|NotTriggerScaleUp'
+    sleep 20
+done
+Events=$(kubectl -n orders get events --sort-by=.lastTimestamp)
+if ! grep -E 'TriggeredScaleUp|FailedScheduling|NotTriggerScaleUp' <<< "$Events"; then
+    printf '%s\n' 'No matching scaling events; inspect capacity and record a no-op if appropriate.' >&2
+fi
 kubectl -n orders delete job bounded-capacity --ignore-not-found
 ```
 
@@ -247,9 +268,9 @@ kubectl -n orders delete job bounded-capacity --ignore-not-found
 
 Observe contraction over the CA scale-down window after deleting the job:
 
-```powershell
+```bash
 kubectl -n kube-system get configmap cluster-autoscaler-status -o yaml
-az aks nodepool show -g $Lab.ResourceGroup --cluster-name $Lab.ClusterName -n apps `
+az aks nodepool show -g "$(lab_value ResourceGroup)" --cluster-name "$(lab_value ClusterName)" -n apps \
   --query '{count:count,min:minCount,max:maxCount}' -o json
 kubectl get nodes
 ```
@@ -271,19 +292,18 @@ For a blocked scale, `Insufficient cpu` with max reached is capacity policy; tai
 
 Stop load and let the queue drain first. Suspend the application child only; the root platform Kustomization continues to run:
 
-```powershell
-flux suspend kustomization orders
-try {
-    kubectl -n orders patch triggerauthentication servicebus-workload --type=merge `
+```bash
+(
+    set -euo pipefail
+    flux suspend kustomization orders
+    trap 'Status=$?; flux resume kustomization orders || Status=$?; flux reconcile kustomization orders --with-source || Status=$?; exit "$Status"' EXIT
+    kubectl -n orders patch triggerauthentication servicebus-workload --type=merge \
       -p '{"spec":{"podIdentity":{"identityId":"00000000-0000-0000-0000-000000000000"}}}'
-    Start-Sleep -Seconds 45
+    sleep 45
     kubectl -n orders describe scaledobject order-worker
     kubectl -n kube-system logs deployment/keda-operator --since=3m --tail=100
     kubectl -n orders get hpa
-} finally {
-    flux resume kustomization orders
-    flux reconcile kustomization orders --with-source
-}
+)
 kubectl -n orders describe scaledobject order-worker
 ```
 
@@ -306,62 +326,72 @@ Restoring the Git identityId fixes only this injection. Real failures also requi
 <details>
 <summary>Solution</summary>
 
-Use a single paused worker to make the in-memory boundary deterministic. KEDA's pause annotation, not a second hand-written HPA, sets one replica:
+Use a single paused worker to make the in-memory boundary deterministic. Run this directive's blocks in one dedicated Bash terminal, including cleanup before closing it. The exit/signal traps attempt recovery if a command fails or the session is interrupted; forced termination or host loss still requires the explicit re-entry cleanup. KEDA's pause annotation, not a second hand-written HPA, sets one replica:
 
-```powershell
+```bash
+set -euo pipefail
+source ./scripts/use-lab.sh
+read -r -p 'Trusted HTTPS application URL: ' UserUri
+UserUri=${UserUri%/}
+[[ "$UserUri" == https://* ]] || { printf '%s\n' 'Use the trusted HTTPS application URL.' >&2; exit 1; }
 flux suspend kustomization orders
+trap 'Status=$?; kubectl -n orders annotate scaledobject order-worker autoscaling.keda.sh/paused-replicas- || Status=$?; flux resume kustomization orders || Status=$?; flux reconcile kustomization orders --with-source || Status=$?; exit "$Status"' EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
 kubectl -n orders annotate scaledobject order-worker 'autoscaling.keda.sh/paused-replicas=1' --overwrite
-Start-Sleep -Seconds 30
+sleep 30
 kubectl -n orders rollout status deployment/order-worker --timeout=300s
-$DuplicateId = "duplicate-$([guid]::NewGuid().ToString('N'))"
-$body = @{id=$DuplicateId;item='synthetic-repeat'} | ConvertTo-Json -Compress
-Invoke-RestMethod "$UserUri/orders" -Method Post -ContentType application/json -Body $body
-Start-Sleep -Seconds 10
-Invoke-RestMethod "$UserUri/orders" -Method Post -ContentType application/json -Body $body
-Start-Sleep -Seconds 10
-kubectl -n orders logs deployment/order-worker --since=5m | Select-String $DuplicateId
+DuplicateId="duplicate-$(openssl rand -hex 16)"
+body=$(jq -nc --arg id "$DuplicateId" '{id:$id,item:"synthetic-repeat"}')
+curl --fail-with-body --silent --show-error "$UserUri/orders" --header 'Content-Type: application/json' --data "$body"
+sleep 10
+curl --fail-with-body --silent --show-error "$UserUri/orders" --header 'Content-Type: application/json' --data "$body"
+sleep 10
+kubectl -n orders logs deployment/order-worker --since=5m | grep -F "$DuplicateId"
 ```
 
 **Expected before Lab 8:** same process logs first `duplicate:false`, then `duplicate:true`, both `durable:false`. Now restart and resend:
 
-```powershell
+```bash
 kubectl -n orders rollout restart deployment/order-worker
 kubectl -n orders rollout status deployment/order-worker --timeout=300s
-Invoke-RestMethod "$UserUri/orders" -Method Post -ContentType application/json -Body $body
-Start-Sleep -Seconds 10
-kubectl -n orders logs deployment/order-worker --since=3m | Select-String $DuplicateId
+curl --fail-with-body --silent --show-error "$UserUri/orders" --header 'Content-Type: application/json' --data "$body"
+sleep 10
+kubectl -n orders logs deployment/order-worker --since=3m | grep -F "$DuplicateId"
 ```
 
 **Expected before Lab 8:** `duplicate:false` again—the state was lost. This is the explicit negative check, **not a successful exactly-once demonstration**. After Lab 8, repeat unchanged: the same ID must log duplicate true after restart, `durable:true`, and GET `/orders/{id}` must show one persisted business row. A PK alone cannot atomically cover unrelated side effects such as charging a card; use an outbox/inbox or downstream idempotency key where required.
 
 Only when repeating after Lab 8, verify the durable lookup for that same ID:
 
-```powershell
-Invoke-RestMethod "$UserUri/orders/$DuplicateId"
+```bash
+curl --fail-with-body --silent --show-error "$UserUri/orders/$DuplicateId"
 ```
 
 The returned ID/item must match the repeated payload and the durable worker logs. Before Lab 8 this endpoint intentionally returns 503; that is not a failure of this lab's negative check.
 
 Send a poison message directly with the already-authorized API identity, bypassing the API's validation only for this controlled test:
 
-```powershell
-$Poison = @'
+```bash
+Poison=$(cat <<'PY'
 from app import bus_client
 from azure.servicebus import ServiceBusMessage
 with bus_client() as client, client.get_queue_sender(queue_name="orders") as sender:
     sender.send_messages(ServiceBusMessage('{"id":"","item":"synthetic-invalid"}'))
-'@
-kubectl -n orders exec deployment/order-api -c api -- python -c $Poison
-Start-Sleep -Seconds 10
-$Peek = @'
+PY
+)
+kubectl -n orders exec deployment/order-api -c api -- python -c "$Poison"
+sleep 10
+Peek=$(cat <<'PY'
 from app import bus_client
 from azure.servicebus import ServiceBusSubQueue
 with bus_client() as client, client.get_queue_receiver(queue_name="orders", sub_queue=ServiceBusSubQueue.DEAD_LETTER) as receiver:
     for message in receiver.peek_messages(max_message_count=10):
         print(message.dead_letter_reason, str(message))
-'@
-kubectl -n orders exec deployment/order-worker -c worker -- python -c $Peek
-az servicebus queue show -g $Lab.ResourceGroup --namespace-name $Lab.ServiceBusName `
+PY
+)
+kubectl -n orders exec deployment/order-worker -c worker -- python -c "$Peek"
+az servicebus queue show -g "$(lab_value ResourceGroup)" --namespace-name "$(lab_value ServiceBusName)" \
   --name orders --query '{maxDelivery:maxDeliveryCount,lock:lockDuration,deadletter:countDetails.deadLetterMessageCount}' -o json
 ```
 
@@ -369,27 +399,30 @@ az servicebus queue show -g $Lab.ResourceGroup --namespace-name $Lab.ServiceBusN
 
 With the active queue drained and the worker still paused at one replica, make one bounded interruption attempt:
 
-```powershell
-$WorkerPods = kubectl -n orders get pods -l app=order-worker -o json | ConvertFrom-Json
-if (@($WorkerPods.items).Count -ne 1) { throw 'Wait for exactly one worker before the interruption test.' }
-$WorkerPod = $WorkerPods.items[0].metadata.name
-$RetryId = "retry-$([guid]::NewGuid().ToString('N'))"
-$RetryBody = @{id=$RetryId;item='synthetic-interruption'} | ConvertTo-Json -Compress
-Invoke-RestMethod "$UserUri/orders" -Method Post -ContentType application/json -Body $RetryBody
-kubectl -n orders delete pod $WorkerPod --wait=false
-Start-Sleep -Seconds 75
+```bash
+WorkerPods=$(kubectl -n orders get pods -l app=order-worker -o json)
+[[ "$(jq '.items | length' <<< "$WorkerPods")" == 1 ]] || {
+    printf '%s\n' 'Wait for exactly one worker before the interruption test.' >&2; exit 1;
+}
+WorkerPod=$(jq -er '.items[0].metadata.name' <<< "$WorkerPods")
+RetryId="retry-$(openssl rand -hex 16)"
+RetryBody=$(jq -nc --arg id "$RetryId" '{id:$id,item:"synthetic-interruption"}')
+curl --fail-with-body --silent --show-error "$UserUri/orders" --header 'Content-Type: application/json' --data "$RetryBody"
+kubectl -n orders delete pod "$WorkerPod" --wait=false
+sleep 75
 kubectl -n orders rollout status deployment/order-worker --timeout=300s
-kubectl -n orders logs deployment/order-worker --since=5m | Select-String $RetryId
+kubectl -n orders logs deployment/order-worker --since=5m | grep -F "$RetryId"
 ```
 
 Normal pod deletion sends SIGTERM. This worker abandons its in-flight message if interrupted during the synthetic delay, allowing redelivery before lock expiry; a hard crash instead leaves an uncompleted lock. No retry is proven if the message was not received before deletion or completed first. A replacement's processed log proves eventual processing, not by itself a prior receive or max-delivery exhaustion. Correlate retained traces/logs from the old pod with the replacement and classify absent receive evidence as inconclusive. Do not repeatedly kill pods to force a claimed result.
 
 Always finish by removing the temporary pause explicitly (Flux does not necessarily own arbitrary live annotations):
 
-```powershell
+```bash
 kubectl -n orders annotate scaledobject order-worker autoscaling.keda.sh/paused-replicas-
 flux resume kustomization orders
 flux reconcile kustomization orders --with-source
+trap - EXIT INT TERM
 ```
 
 If interrupted during this directive, these are the **first re-entry cleanup commands**. Leave dead-letter evidence available for Lab 8/incident debrief; any replay or purge must target only the test messages with deliberate receive/complete logic, not delete/recreate the queue.
@@ -409,14 +442,14 @@ This branch creates at most **one** additional billable node and requires availa
 <details>
 <summary>Solution</summary>
 
-```powershell
-az aks nodepool add -g $Lab.ResourceGroup --cluster-name $Lab.ClusterName -n workerspot `
-  --mode User --priority Spot --eviction-policy Delete --spot-max-price -1 `
-  --node-vm-size Standard_D4ds_v5 --os-sku Ubuntu --node-count 1 `
-  --enable-cluster-autoscaler --min-count 0 --max-count 1 `
-  --vnet-subnet-id $Outputs.nodesSubnetId.value `
+```bash
+az aks nodepool add -g "$(lab_value ResourceGroup)" --cluster-name "$(lab_value ClusterName)" -n workerspot \
+  --mode User --priority Spot --eviction-policy Delete --spot-max-price -1 \
+  --node-vm-size Standard_D4ds_v5 --os-sku Ubuntu --node-count 1 \
+  --enable-cluster-autoscaler --min-count 0 --max-count 1 \
+  --vnet-subnet-id "$(output_value nodesSubnetId)" \
   --node-taints kubernetes.azure.com/scalesetpriority=spot:NoSchedule
-.\ops\Add-GitOpsFile.ps1 -Source .\ops\scaling\spot-worker-patch.yaml -Kind Patch
+bash ./ops/add-gitops-file.sh --source ./ops/scaling/spot-worker-patch.yaml --kind Patch
 git switch -c exercise-spot-worker
 git add gitops
 git commit -m "Place interruption-tolerant synthetic workers on bounded Spot"
@@ -428,26 +461,28 @@ gh pr create --base main --fill
 
 After merge:
 
-```powershell
+```bash
 git switch main
 git pull --ff-only
 flux reconcile kustomization orders --with-source
-.\ops\Invoke-OrderLoad.ps1 -BaseUri $UserUri -Count 100 -Concurrency 4 `
-  -DurationSeconds 60 -OutputPath .artifacts\spot-load.json
+bash ./ops/invoke-order-load.sh --base-uri "$UserUri" --count 100 --concurrency 4 \
+  --duration-seconds 60 --output-path .artifacts/spot-load.json
 kubectl -n orders get pods -l app=order-worker -o wide
 kubectl get nodes -l agentpool=workerspot -o wide
 ```
 
 Wait until a Spot worker is Running, then simulate **one Spot VM eviction**, deriving the exact backing VM rather than editing arbitrary AKS VMSS settings:
 
-```powershell
-$SpotNode = kubectl get nodes -l agentpool=workerspot -o 'jsonpath={.items[0].metadata.name}'
-if (-not $SpotNode) { throw 'No Spot node; do not simulate against a regular pool.' }
-$ProviderId = kubectl get node $SpotNode -o 'jsonpath={.spec.providerID}'
-$VmResourceId = $ProviderId -replace '^azure://', ''
-if ($VmResourceId -notmatch '/virtualMachineScaleSets/[^/]+/virtualMachines/\d+$') { throw 'Unexpected provider ID' }
-az vmss simulate-eviction --ids $VmResourceId
-Start-Sleep -Seconds 45
+```bash
+SpotNode=$(kubectl get nodes -l agentpool=workerspot -o 'jsonpath={.items[0].metadata.name}')
+[[ -n "$SpotNode" ]] || { printf '%s\n' 'No Spot node; do not simulate against a regular pool.' >&2; exit 1; }
+ProviderId=$(kubectl get node "$SpotNode" -o 'jsonpath={.spec.providerID}')
+VmResourceId=${ProviderId#azure://}
+[[ "$ProviderId" == azure://* && "$VmResourceId" =~ /virtualMachineScaleSets/[^/]+/virtualMachines/[0-9]+$ ]] || {
+    printf '%s\n' 'Unexpected provider ID.' >&2; exit 1;
+}
+az vmss simulate-eviction --ids "$VmResourceId"
+sleep 45
 kubectl get nodes -l agentpool=workerspot
 kubectl -n orders get pods -l app=order-worker -o wide
 kubectl -n orders get events --sort-by=.lastTimestamp
@@ -457,9 +492,9 @@ kubectl -n orders get events --sort-by=.lastTimestamp
 
 For regular fallback, remove `spot-worker-patch.yaml` and its `patches` entry from the Git-owned orders directory via a reviewed PR, merge and reconcile. This restores the original `agentpool: apps` selector; no automatic regular-capacity fallback was configured. Verify worker placement/backlog draining, then delete only the optional Spot pool:
 
-```powershell
+```bash
 git switch -c return-workers-to-regular
-.\ops\Remove-GitOpsFile.ps1 -Name spot-worker-patch.yaml
+bash ./ops/remove-gitops-file.sh --name spot-worker-patch.yaml
 git add gitops
 git commit -m "Return workers to regular capacity after Spot exercise"
 git push -u origin HEAD
@@ -469,7 +504,7 @@ git switch main
 git pull --ff-only
 flux reconcile kustomization orders --with-source
 kubectl -n orders get pods -l app=order-worker -o wide
-az aks nodepool delete -g $Lab.ResourceGroup --cluster-name $Lab.ClusterName -n workerspot
+az aks nodepool delete -g "$(lab_value ResourceGroup)" --cluster-name "$(lab_value ClusterName)" -n workerspot
 ```
 
 Do not delete Spot capacity before returning workers to regular pools, or silently add the Spot toleration to all application pods.
@@ -493,8 +528,8 @@ Final teardown is only at course end: remove autoscaling resources through Git b
 <details>
 <summary>Solution</summary>
 
-```powershell
-az aks show -g $Lab.ResourceGroup -n $Lab.ClusterName `
+```bash
+az aks show -g "$(lab_value ResourceGroup)" -n "$(lab_value ClusterName)" \
   --query '{provisioning:nodeProvisioningProfile,outbound:networkProfile.outboundType,network:networkProfile.networkPlugin,mode:networkProfile.networkPluginMode,dataplane:networkProfile.networkDataplane}' -o json
 kubectl -n orders get hpa,scaledobject,deployments
 kubectl -n orders delete job bounded-capacity --ignore-not-found
@@ -521,9 +556,9 @@ For a separately approved NAP comparison, reproduce the job's requested-capacity
 
 For normal reset, remove the two-second `worker-delay-patch.yaml` and its `patches` entry from Git through review, merge, reconcile, then confirm empty active queue and healthy autoscalers. Retain HPA/KEDA and omitted Deployment replicas for later labs. If baseline resilience calls for three regular apps nodes, restore CA minimum three while retaining maximum four:
 
-```powershell
+```bash
 git switch -c restore-normal-worker-throughput
-.\ops\Remove-GitOpsFile.ps1 -Name worker-delay-patch.yaml
+bash ./ops/remove-gitops-file.sh --name worker-delay-patch.yaml
 git add gitops
 git commit -m "Remove synthetic processing delay"
 git push -u origin HEAD
@@ -531,24 +566,24 @@ gh pr create --base main --fill
 # After review/merge:
 git switch main
 git pull --ff-only
-az aks nodepool update -g $Lab.ResourceGroup --cluster-name $Lab.ClusterName -n apps `
+az aks nodepool update -g "$(lab_value ResourceGroup)" --cluster-name "$(lab_value ClusterName)" -n apps \
   --update-cluster-autoscaler --min-count 3 --max-count 4
 flux reconcile kustomization orders --with-source
 ```
 
 Confirm the reset rather than ending at a successful Git merge:
 
-```powershell
+```bash
 kubectl -n orders get hpa,scaledobject,deployments
 kubectl -n orders describe scaledobject order-worker
-az servicebus queue show -g $Lab.ResourceGroup --namespace-name $Lab.ServiceBusName `
+az servicebus queue show -g "$(lab_value ResourceGroup)" --namespace-name "$(lab_value ServiceBusName)" \
   --name orders --query '{active:countDetails.activeMessageCount,deadletter:countDetails.deadLetterMessageCount}' -o json
 flux get kustomizations
 ```
 
 Require a healthy scaler and no temporary pause; `Active=False` and zero workers are normal once active messages drain. Preserve the controlled dead-letter evidence rather than requiring a zero dead-letter count.
 
-For **final teardown only**, remove HPA/ScaledObject/TriggerAuthentication through Git before disabling KEDA; restore intentional fixed replicas if keeping the workloads. Remove the dedicated scaler identity's `keda-operator` federation and the `scaling-identity` deployment's recorded `scalerRoleId` role assignment, then delete that scaler identity (the worker and its receiver role belong to foundation). Then run `az aks update -g $Lab.ResourceGroup -n $Lab.ClusterName --disable-keda` and follow root cleanup. Deleting a Bicep deployment record does **not** delete its resources. Persistent nodes, disks, messages and monitoring charges outlive a stopped load generator.
+For **final teardown only**, remove HPA/ScaledObject/TriggerAuthentication through Git before disabling KEDA; restore intentional fixed replicas if keeping the workloads. Remove the dedicated scaler identity's `keda-operator` federation and the `scaling-identity` deployment's recorded `scalerRoleId` role assignment, then delete that scaler identity (the worker and its receiver role belong to foundation). Then run `az aks update -g "$(lab_value ResourceGroup)" -n "$(lab_value ClusterName)" --disable-keda` and follow root cleanup. Deleting a Bicep deployment record does **not** delete its resources. Persistent nodes, disks, messages and monitoring charges outlive a stopped load generator.
 
 </details>
 

@@ -8,7 +8,7 @@ This lab creates a dedicated resource group and AKS cluster. It does not use or 
 
 ## Prerequisites, cost, and safety boundary
 
-Use Azure CLI 2.83.0 or later, PowerShell 7.4+, `kubectl`, and an account that can create AKS resources and role assignments in a dedicated subscription or resource group. Install or update the `k8s-extension` CLI extension. Select a region supported by Azure Container Storage and a storage-optimized VM SKU with local NVMe capacity and sufficient quota.
+Use Azure CLI 2.83.0 or later, Linux Bash, `jq`, `curl`, `gh`, `kubectl`, and an account that can create AKS resources and role assignments in a dedicated subscription or resource group. Install or update the `k8s-extension` CLI extension. Select a region supported by Azure Container Storage and a storage-optimized VM SKU with local NVMe capacity and sufficient quota.
 
 Budget for two small system nodes and three storage-optimized user nodes for the duration of the exercise. `Standard_L8s_v3` is an example discovery candidate, not a promise of regional availability or the right production size. Use managed OS disks on a VM size that leaves local NVMe devices available to Azure Container Storage. The local-NVMe path is **ephemeral**: deleting, deallocating, reimaging, or replacing a node can destroy the data on that node.
 
@@ -16,9 +16,11 @@ Use only synthetic messages. Do not expose RabbitMQ publicly. Do not delete or d
 
 Create an ignored disposable working folder for rendered manifests and evidence:
 
-```powershell
-$Work = Join-Path $env:TEMP 'aks-rabbitmq-storage-lab'
-New-Item -ItemType Directory -Path $Work -Force | Out-Null
+```bash
+set -euo pipefail
+umask 077
+Work=$(mktemp -d "${TMPDIR:-/tmp}/aks-rabbitmq-storage-lab.XXXXXXXX")
+printf 'Working folder: %s\n' "$Work"
 ```
 
 ## 1. Define what “fewer disks” must prove
@@ -59,20 +61,20 @@ Record the selected SKU's local disk count, local capacity, maximum data-disk at
 
 Set unique values and verify the active subscription before creating anything:
 
-```powershell
-$SubscriptionId = az account show --query id -o tsv
-$Location = 'swedencentral'
-$ResourceGroup = 'rg-aks-rabbitmq-storage-lab'
-$ClusterName = 'aks-rabbitmq-storage-lab'
-$SystemVmSize = 'Standard_D4ds_v5'
-$StorageVmSize = 'Standard_L8s_v3'
+```bash
+SubscriptionId=$(az account show --query id -o tsv)
+Location='swedencentral'
+ResourceGroup='rg-aks-rabbitmq-storage-lab'
+ClusterName='aks-rabbitmq-storage-lab'
+SystemVmSize='Standard_D4ds_v5'
+StorageVmSize='Standard_L8s_v3'
 
 az account show --query '{subscription:id,name:name,tenant:tenantId}' -o table
 az --version
 az extension add --upgrade --name k8s-extension
-az aks get-versions --location $Location -o table
-az vm list-usage --location $Location -o table
-az vm list-skus --location $Location --size $StorageVmSize --all `
+az aks get-versions --location "$Location" -o table
+az vm list-usage --location "$Location" -o table
+az vm list-skus --location "$Location" --size "$StorageVmSize" --all \
   --query "[].{name:name,zones:locationInfo[0].zones,capabilities:capabilities,restrictions:restrictions}" -o json
 ```
 
@@ -80,20 +82,20 @@ In the SKU output, inspect `MaxDataDiskCount`, `MaxResourceVolumeMB`, `vCPUs`, r
 
 Create the resource group, a small system pool, and a three-node storage pool:
 
-```powershell
-az group create --name $ResourceGroup --location $Location `
-  --tags purpose=aks-rabbitmq-storage-lab owner=$env:USERNAME
+```bash
+az group create --name "$ResourceGroup" --location "$Location" \
+  --tags purpose=aks-rabbitmq-storage-lab "owner=$(id -un)"
 
-az aks create --resource-group $ResourceGroup --name $ClusterName `
-  --location $Location --nodepool-name system `
-  --node-count 2 --node-vm-size $SystemVmSize `
+az aks create --resource-group "$ResourceGroup" --name "$ClusterName" \
+  --location "$Location" --nodepool-name system \
+  --node-count 2 --node-vm-size "$SystemVmSize" \
   --node-osdisk-type Managed --generate-ssh-keys
 
-az aks nodepool add --resource-group $ResourceGroup --cluster-name $ClusterName `
-  --name storage --mode User --node-count 3 --node-vm-size $StorageVmSize `
+az aks nodepool add --resource-group "$ResourceGroup" --cluster-name "$ClusterName" \
+  --name storage --mode User --node-count 3 --node-vm-size "$StorageVmSize" \
   --node-osdisk-type Managed --labels workload=messaging storage=local-nvme
 
-az aks get-credentials --resource-group $ResourceGroup --name $ClusterName --overwrite-existing
+az aks get-credentials --resource-group "$ResourceGroup" --name "$ClusterName" --overwrite-existing
 kubectl get nodes -L agentpool,kubernetes.azure.com/mode,workload,storage,topology.kubernetes.io/zone
 ```
 
@@ -112,15 +114,15 @@ Do not copy a floating third-party manifest into a production delivery path. For
 
 Discover the current release, record it, and download that exact version:
 
-```powershell
-$OperatorVersion = gh release view --repo rabbitmq/cluster-operator --json tagName -q .tagName
-$OperatorManifest = Join-Path $Work "cluster-operator-$OperatorVersion.yaml"
-$OperatorUri = "https://github.com/rabbitmq/cluster-operator/releases/download/$OperatorVersion/cluster-operator.yml"
-Invoke-WebRequest -Uri $OperatorUri -OutFile $OperatorManifest
+```bash
+OperatorVersion=$(gh release view --repo rabbitmq/cluster-operator --json tagName -q .tagName)
+OperatorManifest="$Work/cluster-operator-$OperatorVersion.yaml"
+OperatorUri="https://github.com/rabbitmq/cluster-operator/releases/download/$OperatorVersion/cluster-operator.yml"
+curl --fail-with-body --location --max-time 120 "$OperatorUri" --output "$OperatorManifest"
 
-Select-String -Path $OperatorManifest -Pattern 'image:|kind: CustomResourceDefinition|kind: ClusterRole'
+grep -nE 'image:|kind: CustomResourceDefinition|kind: ClusterRole' "$OperatorManifest"
 # Review the complete manifest and image references before applying.
-kubectl apply -f $OperatorManifest
+kubectl apply -f "$OperatorManifest"
 kubectl rollout status deployment/rabbitmq-cluster-operator -n rabbitmq-system --timeout=300s
 kubectl get crd rabbitmqclusters.rabbitmq.com
 kubectl get pods -n rabbitmq-system -o wide
@@ -141,9 +143,9 @@ Create a synthetic durable quorum queue and publish test messages before collect
 
 Create the namespace and baseline manifest:
 
-```powershell
-$BaselineManifest = Join-Path $Work 'rabbitmq-managed-disks.yaml'
-@'
+```bash
+BaselineManifest="$Work/rabbitmq-managed-disks.yaml"
+cat > "$BaselineManifest" <<'YAML'
 apiVersion: v1
 kind: Namespace
 metadata:
@@ -188,36 +190,34 @@ spec:
             values:
             - rabbit-disk
         topologyKey: kubernetes.io/hostname
-'@ | Set-Content -Path $BaselineManifest -Encoding utf8
+YAML
 
-kubectl apply -f $BaselineManifest
-kubectl wait rabbitmqcluster/rabbit-disk -n rabbitmq `
+kubectl apply -f "$BaselineManifest"
+kubectl wait rabbitmqcluster/rabbit-disk -n rabbitmq \
   --for=condition=AllReplicasReady --timeout=600s
-kubectl get pods -n rabbitmq -l app.kubernetes.io/name=rabbit-disk `
+kubectl get pods -n rabbitmq -l app.kubernetes.io/name=rabbit-disk \
   -o custom-columns=NAME:.metadata.name,NODE:.spec.nodeName
 kubectl get nodes -l agentpool=storage -L topology.kubernetes.io/zone
 kubectl get pvc,pv -n rabbitmq
 kubectl exec -n rabbitmq rabbit-disk-server-0 -- rabbitmq-diagnostics cluster_status
-$BaselinePvcs = @(kubectl get pvc -n rabbitmq `
-  -l app.kubernetes.io/name=rabbit-disk -o jsonpath='{range .items[*]}{.metadata.name}{"`n"}{end}')
+BaselinePvcJson=$(kubectl get pvc -n rabbitmq -l app.kubernetes.io/name=rabbit-disk -o json)
+BaselinePvcNames=$(jq -er '.items | if length == 3 then .[].metadata.name else error("Expected three baseline PVCs") end' <<< "$BaselinePvcJson")
+mapfile -t BaselinePvcs <<< "$BaselinePvcNames"
 ```
 
 Expected: three server pods on three different `storage` nodes, three Bound PVCs, three PVs using the Azure Disk CSI provisioner, and all three RabbitMQ members in cluster status.
 
 Create a quorum queue through the local management CLI. Read credentials from the generated Secret without printing them:
 
-```powershell
-function ConvertFrom-KubeSecret([string]$Value) {
-  [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($Value))
-}
+```bash
+# Do not enable shell tracing or record a terminal transcript around credentials.
+RabbitUser=$(kubectl get secret rabbit-disk-default-user -n rabbitmq -o jsonpath='{.data.username}' | base64 --decode)
+RabbitPassword=$(kubectl get secret rabbit-disk-default-user -n rabbitmq -o jsonpath='{.data.password}' | base64 --decode)
 
-$RabbitUser = ConvertFrom-KubeSecret (kubectl get secret rabbit-disk-default-user -n rabbitmq -o jsonpath='{.data.username}')
-$RabbitPassword = ConvertFrom-KubeSecret (kubectl get secret rabbit-disk-default-user -n rabbitmq -o jsonpath='{.data.password}')
-
-kubectl exec -n rabbitmq rabbit-disk-server-0 -- rabbitmqadmin `
-  --username $RabbitUser --password $RabbitPassword `
+kubectl exec -n rabbitmq rabbit-disk-server-0 -- rabbitmqadmin \
+  --username "$RabbitUser" --password "$RabbitPassword" \
   declare queue name=lab-quorum durable=true arguments='{"x-queue-type":"quorum"}'
-kubectl exec -n rabbitmq rabbit-disk-server-0 -- rabbitmqctl `
+kubectl exec -n rabbitmq rabbit-disk-server-0 -- rabbitmqctl \
   list_queues name type leader members_online messages
 ```
 
@@ -225,22 +225,25 @@ If the installed `rabbitmqadmin` syntax differs, use `rabbitmqadmin --help` from
 
 Measure Azure managed disks in the AKS node resource group:
 
-```powershell
-$NodeResourceGroup = az aks show -g $ResourceGroup -n $ClusterName --query nodeResourceGroup -o tsv
-az disk list -g $NodeResourceGroup `
+```bash
+NodeResourceGroup=$(az aks show -g "$ResourceGroup" -n "$ClusterName" --query nodeResourceGroup -o tsv)
+az disk list -g "$NodeResourceGroup" \
   --query "[?starts_with(name, 'pvc-')].{name:name,sizeGiB:diskSizeGb,managedBy:managedBy,sku:sku.name}" -o table
-$BaselineDiskCount = [int](az disk list -g $NodeResourceGroup `
+BaselineDiskCount=$(az disk list -g "$NodeResourceGroup" \
   --query "length([?starts_with(name, 'pvc-')])" -o tsv)
-"RabbitMQ Azure managed disks: $BaselineDiskCount"
+printf 'RabbitMQ Azure managed disks: %s\n' "$BaselineDiskCount"
+if [[ "$BaselineDiskCount" != 3 ]]; then
+  printf 'Expected exactly three workload managed disks; inspect PV handles.\n' >&2
+  exit 1
+fi
 ```
 
 The baseline count must be three. If unrelated PVC disks exist, identify the three PV volume handles and measure those exact disk resource IDs instead of relying on the name prefix.
 
 Clear local credential variables:
 
-```powershell
-$RabbitUser = $null
-$RabbitPassword = $null
+```bash
+unset RabbitUser RabbitPassword
 ```
 
 </details>
@@ -254,28 +257,29 @@ $RabbitPassword = $null
 
 Delete the custom resource, wait for its pods to disappear, and inspect PVC/PV cleanup:
 
-```powershell
+```bash
 kubectl delete rabbitmqcluster rabbit-disk -n rabbitmq --wait=true
-foreach ($Claim in $BaselinePvcs) {
-  if ($Claim) { kubectl delete pvc $Claim -n rabbitmq --wait=true }
-}
+for Claim in "${BaselinePvcs[@]}"; do
+  if [[ -n "$Claim" ]]; then kubectl delete pvc "$Claim" -n rabbitmq --wait=true; fi
+done
 kubectl get pv
 ```
 
 StatefulSet claims can outlive their pods by design, which is why the three captured names are deleted explicitly. If any other claim remains, inspect its owner references and reclaim policy; do not delete unrelated PVs. Wait for Azure resource deletion:
 
-```powershell
-$deadline = (Get-Date).AddMinutes(10)
-do {
-  $Remaining = [int](az disk list -g $NodeResourceGroup `
+```bash
+Deadline=$((SECONDS + 600))
+while :; do
+  Remaining=$(az disk list -g "$NodeResourceGroup" \
     --query "length([?starts_with(name, 'pvc-')])" -o tsv)
-  if ($Remaining -eq 0) { break }
-  Start-Sleep -Seconds 15
-} while ((Get-Date) -lt $deadline)
-
-if ($Remaining -ne 0) {
-  throw "Managed PVC disks remain. Inspect them before continuing."
-}
+  [[ "$Remaining" =~ ^[0-9]+$ ]] || { printf 'Invalid disk count.\n' >&2; exit 1; }
+  if (( Remaining == 0 )); then break; fi
+  if (( SECONDS >= Deadline )); then
+    printf 'Managed PVC disks remain. Inspect them before continuing.\n' >&2
+    exit 1
+  fi
+  sleep 15
+done
 ```
 
 This prevents a false comparison in which old managed disks are mistaken for Azure Container Storage allocations.
@@ -293,21 +297,21 @@ Prove that the RabbitMQ and Kubernetes object counts remain unchanged while Azur
 
 Enable Azure Container Storage and verify its components:
 
-```powershell
-az aks update --resource-group $ResourceGroup --name $ClusterName `
+```bash
+az aks update --resource-group "$ResourceGroup" --name "$ClusterName" \
   --enable-azure-container-storage ephemeralDisk
 
-kubectl get deployments,pods -n kube-system | Select-String acstor
+kubectl get deployments,pods -n kube-system | grep acstor
 kubectl get storageclass local-csi
-kubectl get csistoragecapacities.storage.k8s.io -n kube-system `
-  -o custom-columns=NAME:.metadata.name,CLASS:.storageClassName,CAPACITY:.capacity,NODE:.nodeTopology.matchLabels.'topology\.localdisk\.csi\.acstor\.io/node'
+kubectl get csistoragecapacities.storage.k8s.io -n kube-system \
+  -o 'custom-columns=NAME:.metadata.name,CLASS:.storageClassName,CAPACITY:.capacity,NODE:.nodeTopology.matchLabels.topology\.localdisk\.csi\.acstor\.io/node'
 ```
 
 Create the local-NVMe RabbitMQ resource. The operator does not expose PVC-template annotations directly, so use its StatefulSet override to add the Azure Container Storage acknowledgement to the generated claim template:
 
-```powershell
-$LocalManifest = Join-Path $Work 'rabbitmq-local-nvme.yaml'
-@'
+```bash
+LocalManifest="$Work/rabbitmq-local-nvme.yaml"
+cat > "$LocalManifest" <<'YAML'
 apiVersion: rabbitmq.com/v1beta1
 kind: RabbitmqCluster
 metadata:
@@ -366,12 +370,12 @@ spec:
                 storage: 16Gi
             storageClassName: local-csi
             volumeMode: Filesystem
-'@ | Set-Content -Path $LocalManifest -Encoding utf8
+YAML
 
-kubectl apply -f $LocalManifest
-kubectl wait rabbitmqcluster/rabbit-local -n rabbitmq `
+kubectl apply -f "$LocalManifest"
+kubectl wait rabbitmqcluster/rabbit-local -n rabbitmq \
   --for=condition=AllReplicasReady --timeout=600s
-kubectl get pods -n rabbitmq -l app.kubernetes.io/name=rabbit-local `
+kubectl get pods -n rabbitmq -l app.kubernetes.io/name=rabbit-local \
   -o custom-columns=NAME:.metadata.name,NODE:.spec.nodeName
 kubectl get pvc -n rabbitmq -o custom-columns=NAME:.metadata.name,CLASS:.spec.storageClassName,PV:.spec.volumeName,STATUS:.status.phase
 kubectl get pv -o custom-columns=NAME:.metadata.name,DRIVER:.spec.csi.driver,NODE_AFFINITY:.spec.nodeAffinity.required.nodeSelectorTerms
@@ -382,20 +386,23 @@ Expected: three pods on three distinct storage nodes, three Bound PVCs, three PV
 
 Repeat the queue creation from task 4 against `rabbit-local`, then measure Azure disks:
 
-```powershell
-$RabbitUser = ConvertFrom-KubeSecret (kubectl get secret rabbit-local-default-user -n rabbitmq -o jsonpath='{.data.username}')
-$RabbitPassword = ConvertFrom-KubeSecret (kubectl get secret rabbit-local-default-user -n rabbitmq -o jsonpath='{.data.password}')
-kubectl exec -n rabbitmq rabbit-local-server-0 -- rabbitmqadmin `
-  --username $RabbitUser --password $RabbitPassword `
+```bash
+RabbitUser=$(kubectl get secret rabbit-local-default-user -n rabbitmq -o jsonpath='{.data.username}' | base64 --decode)
+RabbitPassword=$(kubectl get secret rabbit-local-default-user -n rabbitmq -o jsonpath='{.data.password}' | base64 --decode)
+kubectl exec -n rabbitmq rabbit-local-server-0 -- rabbitmqadmin \
+  --username "$RabbitUser" --password "$RabbitPassword" \
   declare queue name=lab-quorum durable=true arguments='{"x-queue-type":"quorum"}'
-kubectl exec -n rabbitmq rabbit-local-server-0 -- rabbitmqctl `
+kubectl exec -n rabbitmq rabbit-local-server-0 -- rabbitmqctl \
   list_queues name type leader members_online messages
 
-$LocalDiskCount = [int](az disk list -g $NodeResourceGroup `
+LocalDiskCount=$(az disk list -g "$NodeResourceGroup" \
   --query "length([?starts_with(name, 'pvc-')])" -o tsv)
-"RabbitMQ Azure managed disks: $LocalDiskCount"
-$RabbitUser = $null
-$RabbitPassword = $null
+printf 'RabbitMQ Azure managed disks: %s\n' "$LocalDiskCount"
+unset RabbitUser RabbitPassword
+if [[ "$LocalDiskCount" != 0 ]]; then
+  printf 'Workload managed disks returned; inspect their PV handles.\n' >&2
+  exit 1
+fi
 ```
 
 The expected workload managed-disk count is zero. The result is **three PVCs backed by node-local storage, not one shared disk**. The three storage VMs still have physical local NVMe devices, and their managed OS disks are unrelated to RabbitMQ PVC attachment density.
@@ -415,16 +422,16 @@ Restore all three members before continuing. Do not drain, reimage, scale down, 
 
 Capture the selected pod, node, and PV before the test:
 
-```powershell
-$TestPod = 'rabbit-local-server-2'
-$TestNode = kubectl get pod $TestPod -n rabbitmq -o jsonpath='{.spec.nodeName}'
-kubectl get pod $TestPod -n rabbitmq -o wide
+```bash
+TestPod='rabbit-local-server-2'
+TestNode=$(kubectl get pod "$TestPod" -n rabbitmq -o jsonpath='{.spec.nodeName}')
+kubectl get pod "$TestPod" -n rabbitmq -o wide
 kubectl get pvc -n rabbitmq
-kubectl cordon $TestNode
-kubectl delete pod $TestPod -n rabbitmq
-Start-Sleep -Seconds 20
+kubectl cordon "$TestNode"
+kubectl delete pod "$TestPod" -n rabbitmq
+sleep 20
 kubectl get pods -n rabbitmq -o wide
-kubectl get events -n rabbitmq --sort-by=.lastTimestamp | Select-Object -Last 30
+kubectl get events -n rabbitmq --sort-by=.lastTimestamp | tail -n 30
 kubectl exec -n rabbitmq rabbit-local-server-0 -- rabbitmq-diagnostics cluster_status
 ```
 
@@ -432,11 +439,11 @@ Expected: the replacement ordinal is Pending because its existing local PV has n
 
 Recover by making the original node schedulable:
 
-```powershell
-kubectl uncordon $TestNode
-kubectl wait pod/$TestPod -n rabbitmq --for=condition=Ready --timeout=600s
+```bash
+kubectl uncordon "$TestNode"
+kubectl wait "pod/$TestPod" -n rabbitmq --for=condition=Ready --timeout=600s
 kubectl exec -n rabbitmq rabbit-local-server-0 -- rabbitmq-diagnostics cluster_status
-kubectl exec -n rabbitmq rabbit-local-server-0 -- rabbitmqctl `
+kubectl exec -n rabbitmq rabbit-local-server-0 -- rabbitmqctl \
   list_queues name type leader members_online messages
 ```
 
@@ -514,18 +521,24 @@ Delete the RabbitMQ resource and namespace first, verify claims are gone, then d
 <details>
 <summary>Solution: complete teardown</summary>
 
-```powershell
+```bash
 kubectl delete rabbitmqcluster rabbit-local -n rabbitmq --ignore-not-found --wait=true
 kubectl delete namespace rabbitmq --ignore-not-found --wait=true
 kubectl get pv
-az resource list --resource-group $ResourceGroup -o table
+az resource list --resource-group "$ResourceGroup" -o table
 ```
 
 Review the inventory. Only after confirming that the group is the dedicated disposable lab boundary:
 
-```powershell
-az group delete --name $ResourceGroup
-Remove-Item -Path $Work -Recurse -Force
+```bash
+read -r -p "Type $ResourceGroup to confirm the disposable resource-group boundary: " ConfirmGroup
+[[ "$ConfirmGroup" == "$ResourceGroup" ]] || { printf 'Deletion not confirmed.\n' >&2; exit 1; }
+az group delete --name "$ResourceGroup"
+# Preserve evidence outside this disposable folder before confirming its removal.
+read -r -p "Type $Work to confirm local manifest/evidence removal: " ConfirmWork
+[[ "$ConfirmWork" == "$Work" && -d "$Work" && "$Work" == "${TMPDIR:-/tmp}/aks-rabbitmq-storage-lab."* ]] ||
+  { printf 'Local cleanup not confirmed or path is not the lab folder.\n' >&2; exit 1; }
+rm -r -- "$Work"
 ```
 
 The Azure command prompts for confirmation. After deletion completes, check Cost Management and confirm no Elastic SAN, snapshot, disk, private endpoint, or role assignment created outside the resource group remains.

@@ -3,7 +3,7 @@ on:
   workflow_dispatch:
   push:
     branches: [main]
-    paths: ["app/**", ".github/workflows/publish-image.yml"]
+    paths: ["app/**", "scripts/connect-acr-podman.sh", "scripts/lib.sh", ".github/workflows/publish-image.yml"]
 permissions:
   contents: read
   id-token: write
@@ -26,33 +26,42 @@ jobs:
           tenant-id: ${{ vars.AZURE_TENANT_ID }}
           subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
       - name: Build once and publish immutable evidence
-        shell: pwsh
+        shell: bash
         env:
           ACR_NAME: ${{ vars.ACR_NAME }}
           REGISTRY: ${{ vars.REGISTRY_SERVER }}
         run: |
-          $ErrorActionPreference = 'Stop'
-          $PSNativeCommandUseErrorActionPreference = $true
-          az acr login --name $env:ACR_NAME
-          docker buildx build --pull --platform linux/amd64 --provenance=true --sbom=true `
-            --file app/Dockerfile --tag "$env:REGISTRY/order-app:$env:GITHUB_SHA" `
-            --metadata-file image-metadata.json --push app
-          $digest = (Get-Content image-metadata.json -Raw | ConvertFrom-Json).'containerimage.digest'
-          if ($digest -notmatch '^sha256:[a-f0-9]{64}$') { throw 'Missing immutable digest' }
-          "$env:REGISTRY/order-app@$digest" | Set-Content image-reference.txt
-          "Published ``$env:REGISTRY/order-app@$digest``" >> $env:GITHUB_STEP_SUMMARY
+          set -euo pipefail
+          bash ./scripts/connect-acr-podman.sh --registry-name "$ACR_NAME" --registry-server "$REGISTRY"
+          image="$REGISTRY/order-app:$GITHUB_SHA"
+          podman build --pull=always --platform linux/amd64 --sbom=syft-spdx \
+            --sbom-output image-sbom.spdx.json --metadata-file image-metadata.json \
+            --file app/Containerfile --tag "$image" app
+          jq -e '.spdxVersion | startswith("SPDX-")' image-sbom.spdx.json >/dev/null
+          jq -e 'type == "object"' image-metadata.json >/dev/null
+          podman push --digestfile image-digest.txt "$image"
+          digest=$(tr -d '\r\n' < image-digest.txt)
+          [[ $digest =~ ^sha256:[a-f0-9]{64}$ ]] || { echo 'Missing immutable digest' >&2; exit 1; }
+          printf '%s\n' "$REGISTRY/order-app@$digest" > image-reference.txt
+          printf 'Published `%s`\n' "$REGISTRY/order-app@$digest" >> "$GITHUB_STEP_SUMMARY"
       - uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6, reviewed 2026-09-10
         with:
           name: order-image-${{ github.sha }}
           path: |
             image-reference.txt
+            image-digest.txt
             image-metadata.json
+            image-sbom.spdx.json
           retention-days: 7
+          if-no-files-found: error
       - name: Remove cached registry and Azure credentials
         if: always()
-        shell: pwsh
+        shell: bash
         env:
           REGISTRY: ${{ vars.REGISTRY_SERVER }}
         run: |
-          docker logout $env:REGISTRY
-          az logout
+          set -euo pipefail
+          status=0
+          podman logout "$REGISTRY" || status=$?
+          az logout || status=$?
+          exit "$status"

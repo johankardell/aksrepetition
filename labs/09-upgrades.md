@@ -2,7 +2,7 @@
 
 **Customer:** regular lifecycle work without promising zero disruption. **Time:** 3–5 hours with a supported target available. **Result:** a real blocked drain and repair, a supported Kubernetes upgrade, a node-image update, and measured traffic/transaction evidence.
 
-Prerequisites: labs 1–8, last successful backup and PostgreSQL restore test, spare vCPU/subnet quota for surge, and an approved change window. A customer SLO is not an AKS control-plane SLA. Run from the private PowerShell 7 management host; use Contributor on AKS plus scoped node administration, not admin kubeconfig.
+Prerequisites: labs 1–8, last successful backup and PostgreSQL restore test, spare vCPU/subnet quota for surge, and an approved change window. A customer SLO is not an AKS control-plane SLA. Run Bash from the repository root on the private Linux management host with Azure CLI, kubectl, Flux CLI, Git, GitHub CLI, `jq`, and the Linux HTTP/database tools from lab 8. Start each terminal with `set -euo pipefail`; session variables do not transfer between terminals. Use Contributor on AKS plus scoped node administration, not admin kubeconfig.
 
 ## 1. Build a specific go/no-go record
 
@@ -11,42 +11,47 @@ Prerequisites: labs 1–8, last successful backup and PostgreSQL restore test, s
 <details>
 <summary>Solution</summary>
 
-```powershell
-. .\scripts\Use-Lab.ps1
-$ErrorActionPreference = 'Stop'
-$PSNativeCommandUseErrorActionPreference = $true
-New-Item .\.artifacts\advanced -ItemType Directory -Force | Out-Null
-$AppKustomization = 'orders'
-$FluxNamespace = 'flux-system'
-az aks show -g $Lab.ResourceGroup -n $Lab.ClusterName -o json | Set-Content .\.artifacts\advanced\cluster-before-upgrade.json
-az aks get-upgrades -g $Lab.ResourceGroup -n $Lab.ClusterName -o json | Set-Content .\.artifacts\advanced\available-upgrades.json
-az aks get-versions -l $Lab.Location -o table
-az vm list-usage -l $Lab.Location -o table
-az aks nodepool list -g $Lab.ResourceGroup --cluster-name $Lab.ClusterName -o table
+```bash
+set -euo pipefail
+source ./scripts/use-lab.sh
+mkdir -p .artifacts/advanced
+AppKustomization=orders
+FluxNamespace=flux-system
+az aks show -g "$(lab_value ResourceGroup)" -n "$(lab_value ClusterName)" -o json > .artifacts/advanced/cluster-before-upgrade.json
+az aks get-upgrades -g "$(lab_value ResourceGroup)" -n "$(lab_value ClusterName)" -o json > .artifacts/advanced/available-upgrades.json
+az aks get-versions -l "$(lab_value Location)" -o table
+az vm list-usage -l "$(lab_value Location)" -o table
+az aks nodepool list -g "$(lab_value ResourceGroup)" --cluster-name "$(lab_value ClusterName)" -o table
 kubectl get nodes -o wide
 kubectl get pdb,hpa -A
 kubectl get events -A --field-selector type=Warning
 flux get kustomizations -A
-Get-Content .\.artifacts\advanced\available-upgrades.json
+jq . .artifacts/advanced/available-upgrades.json
 ```
 
 Select an **explicit GA** version from `get-upgrades`, not a blog or today's default:
 
-```powershell
-$Available = Get-Content .\.artifacts\advanced\available-upgrades.json -Raw | ConvertFrom-Json
-$Allowed = @($Available.controlPlaneProfile.upgrades | Where-Object { -not $_.isPreview } | ForEach-Object kubernetesVersion)
-$Target = Read-Host "Approved target from: $($Allowed -join ', ')"
-if ($Target -notin $Allowed) { throw 'Target is not an advertised supported non-preview upgrade.' }
+```bash
+Available=$(< .artifacts/advanced/available-upgrades.json)
+Allowed=$(jq -c '[.controlPlaneProfile.upgrades[]? | select(.isPreview != true) | .kubernetesVersion]' <<< "$Available")
+[[ "$(jq 'length' <<< "$Allowed")" != 0 ]] || {
+  printf '%s\n' 'No supported non-preview target; defer the Kubernetes-version portion.' >&2; exit 1;
+}
+printf 'Advertised GA targets: %s\n' "$(jq -r 'join(", ")' <<< "$Allowed")"
+read -r -p 'Approved target: ' Target
+jq -e --arg target "$Target" 'index($target) != null' <<< "$Allowed" > /dev/null || {
+  printf '%s\n' 'Target is not an advertised supported non-preview upgrade.' >&2; exit 1;
+}
 ```
 
 If the list is empty, **defer the Kubernetes-version portion** until a supported update exists; node-image-only work does not prove a Kubernetes upgrade. Do not downgrade or provision an unsupported release to manufacture an exercise.
 
 Review the target release notes, Kubernetes API removals, AzureLinux3 support, CSI/Backup extension compatibility, Cilium/network policies, Flux, KEDA, gateway, monitoring and Defender. `kubectl api-resources` tells you served APIs, not whether clients still call deprecated endpoints. Review API-server audit logs from lab 5, API deprecation insights/upgrade checks, and every CRD/webhook vendor's supported matrix. Save this decision with owner and date.
 
-```powershell
-kubectl api-resources -o wide | Set-Content .\.artifacts\advanced\served-apis.txt
-kubectl get validatingwebhookconfigurations,mutatingwebhookconfigurations -o yaml | Set-Content .\.artifacts\advanced\webhooks-before.yaml
-az aks nodepool get-upgrades -g $Lab.ResourceGroup --cluster-name $Lab.ClusterName -n apps -o json
+```bash
+kubectl api-resources -o wide > .artifacts/advanced/served-apis.txt
+kubectl get validatingwebhookconfigurations,mutatingwebhookconfigurations -o yaml > .artifacts/advanced/webhooks-before.yaml
+az aks nodepool get-upgrades -g "$(lab_value ResourceGroup)" --cluster-name "$(lab_value ClusterName)" -n apps -o json
 ```
 
 No-go conditions: failing admission webhooks, Pending production pods, zero allowed disruptions without a scaling plan, unsupported extension, no surge quota, backup not verified, ongoing Fleet/autoupgrade, or an unbounded consumer backlog. Fix those first.
@@ -64,26 +69,26 @@ Use a dated decision record with current/target versions, the advertised upgrade
 
 Record existing upgrade channels; disable only automatic Kubernetes scheduling for this manual exercise, and retain a node OS channel:
 
-```powershell
-az aks update -g $Lab.ResourceGroup -n $Lab.ClusterName --auto-upgrade-channel none --node-os-upgrade-channel NodeImage
-az aks maintenanceconfiguration add -g $Lab.ResourceGroup --cluster-name $Lab.ClusterName `
-  -n aksManagedAutoUpgradeSchedule --schedule-type Weekly --day-of-week Saturday `
+```bash
+az aks update -g "$(lab_value ResourceGroup)" -n "$(lab_value ClusterName)" --auto-upgrade-channel none --node-os-upgrade-channel NodeImage
+az aks maintenanceconfiguration add -g "$(lab_value ResourceGroup)" --cluster-name "$(lab_value ClusterName)" \
+  -n aksManagedAutoUpgradeSchedule --schedule-type Weekly --day-of-week Saturday \
   --interval-weeks 1 --duration 4 --utc-offset +00:00 --start-time 01:00
-az aks maintenanceconfiguration add -g $Lab.ResourceGroup --cluster-name $Lab.ClusterName `
-  -n aksManagedNodeOSUpgradeSchedule --schedule-type Weekly --day-of-week Sunday `
+az aks maintenanceconfiguration add -g "$(lab_value ResourceGroup)" --cluster-name "$(lab_value ClusterName)" \
+  -n aksManagedNodeOSUpgradeSchedule --schedule-type Weekly --day-of-week Sunday \
   --interval-weeks 1 --duration 4 --utc-offset +00:00 --start-time 01:00
-az aks maintenanceconfiguration list -g $Lab.ResourceGroup --cluster-name $Lab.ClusterName
+az aks maintenanceconfiguration list -g "$(lab_value ResourceGroup)" --cluster-name "$(lab_value ClusterName)"
 ```
 
 Use `update` instead of `add` if those names already exist. Schedules do not enable upgrades; auto-upgrade and node OS channels are distinct. The `default` maintenance configuration is for AKS platform releases, not a substitute for these schedules. Planned maintenance is best effort, and urgent platform maintenance can occur outside windows. Manual upgrade commands are explicit change actions; do not assume the schedule delays your command.
 
 Configure bounded surge and drain timeouts on both managed pools:
 
-```powershell
-'system','apps' | ForEach-Object {
-  az aks nodepool update -g $Lab.ResourceGroup --cluster-name $Lab.ClusterName -n $_ `
+```bash
+for Pool in system apps; do
+  az aks nodepool update -g "$(lab_value ResourceGroup)" --cluster-name "$(lab_value ClusterName)" -n "$Pool" \
     --max-surge 1 --drain-timeout 30 --node-soak-duration 5
-}
+done
 ```
 
 Inspect actual pool names and substitute if foundation used a different system-pool name. One extra node **per updating pool**, SKU availability, zone capacity, pod scheduling constraints and IP planning all affect feasibility. Do not use `--force` to bypass failed upgrade validations.
@@ -99,33 +104,39 @@ The standalone `maintenance-lab` namespace is explicitly incident-owned, not sel
 <details>
 <summary>Solution</summary>
 
-```powershell
-kubectl apply -f .\advanced\maintenance\drain.yaml
+```bash
+kubectl apply -f ./advanced/maintenance/drain.yaml
 kubectl rollout status deployment/drain-guard -n maintenance-lab --timeout=300s
-$Node = kubectl get pod -n maintenance-lab -l app=drain-guard -o jsonpath='{.items[0].spec.nodeName}'
+Node=$(kubectl get pod -n maintenance-lab -l app=drain-guard -o 'jsonpath={.items[0].spec.nodeName}')
+[[ -n "$Node" ]] || { printf '%s\n' 'No incident node was recorded.' >&2; exit 1; }
+printf '%s\n' "$Node" > .artifacts/advanced/drain-node.txt
 kubectl get pdb drain-guard -n maintenance-lab
-$PSNativeCommandUseErrorActionPreference = $false
-try {
-  kubectl drain $Node --ignore-daemonsets --pod-selector=app=drain-guard --timeout=60s
-  if ($LASTEXITCODE -eq 0) { throw 'Expected PDB block did not occur; inspect the test before continuing.' }
-} finally {
-  kubectl uncordon $Node
-  $PSNativeCommandUseErrorActionPreference = $true
-}
+(
+  set -euo pipefail
+  trap 'Status=$?; kubectl uncordon "$Node" || Status=$?; exit "$Status"' EXIT
+  DrainStatus=0
+  kubectl drain "$Node" --ignore-daemonsets --pod-selector=app=drain-guard --timeout=60s \
+    > .artifacts/advanced/blocked-drain.txt 2>&1 || DrainStatus=$?
+  cat .artifacts/advanced/blocked-drain.txt
+  [[ "$DrainStatus" != 0 ]] || { printf '%s\n' 'Expected PDB block did not occur; inspect the test.' >&2; exit 1; }
+  grep -Fi 'disruption budget' .artifacts/advanced/blocked-drain.txt
+)
 kubectl describe pdb drain-guard -n maintenance-lab
 ```
 
-Expected: `Cannot evict pod as it would violate the pod's disruption budget`, allowed disruptions 0, timeout. The selector limits evictions to the test pod; drain still cordons the node, so `finally` always uncordons it. This is a **real Kubernetes eviction API call**, not a fake text error.
+Expected: `Cannot evict pod as it would violate the pod's disruption budget`, allowed disruptions 0, timeout. The selector limits evictions to the test pod; drain still cordons the node, so the subshell's `EXIT` trap always attempts to uncordon it and reports any recovery failure. After host loss or forced termination, recover the exact node from `.artifacts/advanced/drain-node.txt` and uncordon it first. This is a **real Kubernetes eviction API call**, not a fake text error.
 
 Solution: restore spare capacity, not remove the PDB:
 
-```powershell
+```bash
 kubectl scale deployment drain-guard -n maintenance-lab --replicas=2
 kubectl rollout status deployment/drain-guard -n maintenance-lab --timeout=300s
 kubectl get pdb drain-guard -n maintenance-lab
-try {
-  kubectl drain $Node --ignore-daemonsets --pod-selector=app=drain-guard --timeout=300s
-} finally { kubectl uncordon $Node }
+(
+  set -euo pipefail
+  trap 'Status=$?; kubectl uncordon "$Node" || Status=$?; exit "$Status"' EXIT
+  kubectl drain "$Node" --ignore-daemonsets --pod-selector=app=drain-guard --timeout=300s
+)
 kubectl delete namespace maintenance-lab
 ```
 
@@ -140,27 +151,42 @@ Expected at least one allowed disruption and successful eviction. If the second 
 <details>
 <summary>Solution</summary>
 
-Use two PowerShell terminals on the management host. In terminal A:
+Use two Bash terminals on the management host. In terminal A:
 
-```powershell
-$AppUrl = Read-Host 'Lab 3 HTTPS application base URL'
-.\advanced\Measure-Orders.ps1 -BaseUri $AppUrl -Seconds 3600 -OutputPath .\.artifacts\advanced\upgrade-traffic.json
+```bash
+set -euo pipefail
+source ./scripts/use-lab.sh
+read -r -p 'Lab 3 HTTPS application base URL: ' AppUrl
+AppUrl=${AppUrl%/}
+[[ "$AppUrl" == https://* ]] || { printf '%s\n' 'Use the trusted HTTPS application URL.' >&2; exit 1; }
+bash ./advanced/measure-orders.sh --base-uri "$AppUrl" --seconds 3600 --output-path .artifacts/advanced/upgrade-traffic.json
 ```
 
 The helper measures readiness HTTP status and latency once per second. It is **not** a full order SLI. In addition, create a synthetic order immediately before and after each operation and check GET plus worker/database evidence as in lab 8. Record retry outcomes separately; retrying should not hide failed requests in the SLI. Agree the lab objective first, for example ≥99% successful probes and no loss of accepted test orders; use the customer's actual SLO for a real change.
 
 In terminal B, save your target and start the supported control-plane upgrade, then node pools one at a time:
 
-Use the existing session from tasks 1–3 as terminal B so `$Target`, `$Lab` and the Flux names are defined. In a fresh terminal, load `Use-Lab.ps1` and repeat target discovery/validation rather than guessing or relying on variables from terminal A. Execute the following operations individually, applying the health gate between them.
+Use the existing session from tasks 1–3 as terminal B so `$Target`, `$Lab` and the Flux names are defined. In a fresh terminal, run `set -euo pipefail`, source `./scripts/use-lab.sh` and repeat target discovery/validation rather than guessing or relying on variables from terminal A. Execute the following operations individually, applying the health gate between them.
 
-```powershell
-$ChangeStart = [DateTime]::UtcNow
-az aks upgrade -g $Lab.ResourceGroup -n $Lab.ClusterName --kubernetes-version $Target --control-plane-only --yes
-az aks show -g $Lab.ResourceGroup -n $Lab.ClusterName --query '{version:kubernetesVersion,state:provisioningState}'
-az aks nodepool upgrade -g $Lab.ResourceGroup --cluster-name $Lab.ClusterName -n system --kubernetes-version $Target
+```bash
+ChangeStart=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+printf '%s\n' "$ChangeStart" > .artifacts/advanced/upgrade-start.txt
+az aks upgrade -g "$(lab_value ResourceGroup)" -n "$(lab_value ClusterName)" --kubernetes-version "$Target" --control-plane-only --yes
+az aks show -g "$(lab_value ResourceGroup)" -n "$(lab_value ClusterName)" --query '{version:kubernetesVersion,state:provisioningState}'
+```
+
+Apply the health/business gate before upgrading the system pool:
+
+```bash
+az aks nodepool upgrade -g "$(lab_value ResourceGroup)" --cluster-name "$(lab_value ClusterName)" -n system --kubernetes-version "$Target"
 kubectl get nodes -o wide
 kubectl get pods -n kube-system
-az aks nodepool upgrade -g $Lab.ResourceGroup --cluster-name $Lab.ClusterName -n apps --kubernetes-version $Target
+```
+
+Apply the same gate again before upgrading the apps pool:
+
+```bash
+az aks nodepool upgrade -g "$(lab_value ResourceGroup)" --cluster-name "$(lab_value ClusterName)" -n apps --kubernetes-version "$Target"
 kubectl get nodes -o wide
 kubectl rollout status deployment/order-api -n orders --timeout=600s
 kubectl rollout status deployment/order-worker -n orders --timeout=600s
@@ -179,14 +205,14 @@ Before moving to the next pool, require healthy system pods, ready production re
 <details>
 <summary>Solution</summary>
 
-```powershell
-az aks nodepool list -g $Lab.ResourceGroup --cluster-name $Lab.ClusterName `
-  --query '[].{name:name,kubernetes:orchestratorVersion,image:nodeImageVersion,state:provisioningState}' -o json |
-  Set-Content .\.artifacts\advanced\images-before.json
-az aks nodepool upgrade -g $Lab.ResourceGroup --cluster-name $Lab.ClusterName -n apps --node-image-only
-az aks nodepool list -g $Lab.ResourceGroup --cluster-name $Lab.ClusterName `
-  --query '[].{name:name,kubernetes:orchestratorVersion,image:nodeImageVersion,state:provisioningState}' -o json |
-  Set-Content .\.artifacts\advanced\images-after.json
+```bash
+az aks nodepool list -g "$(lab_value ResourceGroup)" --cluster-name "$(lab_value ClusterName)" \
+  --query '[].{name:name,kubernetes:orchestratorVersion,image:nodeImageVersion,state:provisioningState}' -o json \
+  > .artifacts/advanced/images-before.json
+az aks nodepool upgrade -g "$(lab_value ResourceGroup)" --cluster-name "$(lab_value ClusterName)" -n apps --node-image-only
+az aks nodepool list -g "$(lab_value ResourceGroup)" --cluster-name "$(lab_value ClusterName)" \
+  --query '[].{name:name,kubernetes:orchestratorVersion,image:nodeImageVersion,state:provisioningState}' -o json \
+  > .artifacts/advanced/images-after.json
 kubectl get nodes -o wide
 kubectl get pdb -n orders
 flux get kustomizations -A
@@ -199,25 +225,25 @@ Update the authoritative foundation **deployment parameters** to `$Target` and p
 
 When terminal A finishes:
 
-```powershell
-$Samples = Get-Content .\.artifacts\advanced\upgrade-traffic.json -Raw | ConvertFrom-Json
-if (@($Samples).Count -eq 0) { throw 'No traffic samples were recorded; availability cannot be calculated.' }
-$Failed = @($Samples | Where-Object status -NE 200)
-[pscustomobject]@{
-  Samples = @($Samples).Count
-  Failed = $Failed.Count
-  AvailabilityPercent = [Math]::Round(100.0 * (@($Samples).Count - $Failed.Count) / @($Samples).Count, 3)
-  Start = $ChangeStart
-  End = [DateTime]::UtcNow
+```bash
+Samples=$(< .artifacts/advanced/upgrade-traffic.json)
+jq -e 'type == "array" and length > 0' <<< "$Samples" > /dev/null || {
+  printf '%s\n' 'No traffic sample array was recorded; availability cannot be calculated.' >&2; exit 1;
 }
-$Failed | Format-Table
+read -r ChangeStart < .artifacts/advanced/upgrade-start.txt
+jq --arg start "$ChangeStart" --arg end "$(date -u +%Y-%m-%dT%H:%M:%SZ)" '
+  length as $count | (map(select(.status != 200)) | length) as $failed |
+  {Samples:$count, Failed:$failed,
+   AvailabilityPercent:((100 * ($count - $failed) / $count * 1000 | round) / 1000),
+   Start:$start, End:$end}' <<< "$Samples"
+jq '[.[] | select(.status != 200)]' <<< "$Samples"
 ```
 
 Correlate failed/slow samples with node drain timestamps, ingress endpoints, order retries and queue age. Report readiness and order SLI separately. Investigate all missing IDs against PostgreSQL and Service Bus active/dead-letter counts.
 
 For example, 10 failed observations out of 1,000 means 99% sampled readiness availability; it says nothing by itself about the durability of accepted orders. This is an illustrative calculation, not a measured lab result. Pair the actual sample count and time range with accepted/processed/missing order IDs, latency and retries, and compare against the objective agreed before the change.
 
-Persist the chosen `KubernetesVersion` in local deployment settings without committing those settings. In the owned infrastructure definition, retain the current post-lab networking/add-ons as well as `maxSurge`, `drainTimeoutInMinutes` and `nodeSoakDurationInMinutes`; do not use the old foundation as a rollback. Update all three pinned PSA version labels in `advanced\governance\teams.yaml` to the tested target minor using lab 7's reviewed Git workflow, then reconcile `teams` and record its applied SHA.
+Persist the chosen `KubernetesVersion` in local deployment settings without committing those settings. In the owned infrastructure definition, retain the current post-lab networking/add-ons as well as `maxSurge`, `drainTimeoutInMinutes` and `nodeSoakDurationInMinutes`; do not use the old foundation as a rollback. Update all three pinned PSA version labels in `advanced/governance/teams.yaml` to the tested target minor using lab 7's reviewed Git workflow, then reconcile `teams` and record its applied SHA.
 
 </details>
 
@@ -230,13 +256,14 @@ Persist the chosen `KubernetesVersion` in local deployment settings without comm
 
 In the lab-4 Git repository, revert the known **application** release commit from that lab, not the database migration or platform upgrade:
 
-```powershell
+```bash
 git log --oneline -12
-$AppReleaseCommit = Read-Host 'Reviewed application-only release commit to revert'
-git show --stat $AppReleaseCommit
-git revert --no-commit $AppReleaseCommit
-.\advanced\Publish-ReviewedChange.ps1 -Message "Revert the reviewed application-only release"
-flux reconcile kustomization $AppKustomization -n $FluxNamespace --with-source
+read -r -p 'Reviewed application-only release commit to revert: ' AppReleaseCommit
+[[ "$AppReleaseCommit" =~ ^[[:xdigit:]]{7,40}$ ]] || { printf '%s\n' 'Expected a reviewed commit SHA.' >&2; exit 1; }
+git --no-pager show --stat "$AppReleaseCommit"
+git revert --no-commit "$AppReleaseCommit"
+bash ./advanced/publish-reviewed-change.sh --message "Revert the reviewed application-only release"
+flux reconcile kustomization "$AppKustomization" -n "$FluxNamespace" --with-source
 kubectl rollout status deployment/order-api -n orders --timeout=600s
 ```
 
@@ -287,10 +314,11 @@ Remove the incident namespace if any step stopped early and uncordon only the no
 
 If the drain exercise stopped early, inspect the recorded node and incident namespace before acting:
 
-```powershell
-kubectl get node $Node
+```bash
+: "${Node:?Recover the exact incident node from .artifacts/advanced/drain-node.txt before cleanup}"
+kubectl get node "$Node"
 kubectl get all,pdb -n maintenance-lab
-kubectl uncordon $Node
+kubectl uncordon "$Node"
 kubectl delete namespace maintenance-lab --ignore-not-found
 flux get kustomizations -A
 kubectl get nodes

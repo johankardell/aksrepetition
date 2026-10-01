@@ -8,7 +8,9 @@
 
 Complete the [README bootstrap](../README.md#bootstrap-configuration). Have a routed management workstation/host and private DNS plan. Confirm spending for six worker VMs, AKS Standard tier, ACR Premium, Service Bus Premium and Log Analytics. Check at least 24 vCPUs plus surge headroom in the chosen VM family. Use only the dedicated resource group.
 
-Files: `infra\main.bicep`, `infra\workload-identities.bicep`, `scripts\Deploy-Foundation.ps1`, `app\`, `k8s\base\`.
+Files: `infra/main.bicep`, `infra/workload-identities.bicep`, `scripts/deploy-foundation.sh`, `app/`, `k8s/base/`. Run these solutions in Bash on a Linux management host at the repository root, with Azure CLI, jq, kubectl, kubelogin, Podman, dig, getent, OpenSSL and curl installed.
+
+Keep strict mode enabled for the following solutions. `use-lab.sh` supplies `Lab` and `Outputs` as JSON strings, `Root` as the absolute repository root, `lab_value KEY` for a settings value, and `output_value KEY` for a foundation output's `.value`. Deployment-derived resource names must be populated by that helper, not guessed. Execute other helpers with `bash ./path/name.sh` and their named `--kebab-case` options.
 
 ## Directives
 
@@ -16,14 +18,14 @@ Files: `infra\main.bicep`, `infra\workload-identities.bicep`, `scripts\Deploy-Fo
 
 Sketch this request/data path: private administrator -> AKS private API; kubelet identity -> ACR; workload identity -> Azure dependencies; web/API -> Service Bus -> worker. The workload dependencies are prepared here and explored in lab 2.
 
-Inspect `infra\main.bicep`. Identify the **cluster mode**, **pricing tier**, **network plugin/IPAM**, **data plane**, **node OS**, **control-plane exposure**, and three separate managed identity purposes. Explain why "private cluster" says nothing by itself about the data-plane application's public exposure.
+Inspect `infra/main.bicep`. Identify the **cluster mode**, **pricing tier**, **network plugin/IPAM**, **data plane**, **node OS**, **control-plane exposure**, and three separate managed identity purposes. Explain why "private cluster" says nothing by itself about the data-plane application's public exposure.
 
 Confirm no pod/service/VNet address range overlaps connected networks. Change the template ranges before initial creation if required; do not attempt an unplanned in-place address migration later.
 
 <details>
 <summary>Solution</summary>
 
-| Decision | Answer from `infra\main.bicep` |
+| Decision | Answer from `infra/main.bicep` |
 |---|---|
 | Cluster mode and pricing | Manually managed AKS Standard mode, not Automatic; the resource SKU is `Base` with the `Standard` pricing tier. |
 | Networking | Azure CNI Overlay (`azure` / `overlay`) with the Cilium data plane. Pods use `192.168.0.0/16`, services `172.20.0.0/16`, and the default spoke `10.40.0.0/16`. Compare all of them with connected networks, including the later firewall hub. |
@@ -46,10 +48,11 @@ Private control-plane access does not prevent a public LoadBalancer or gateway f
 <details>
 <summary>Solution</summary>
 
-```powershell
-. .\scripts\Use-Lab.ps1
-az aks get-versions --location $Lab.Location -o table
-az vm list-skus --location $Lab.Location --size $Lab.VmSize --all -o json
+```bash
+set -euo pipefail
+source ./scripts/use-lab.sh
+az aks get-versions --location "$(lab_value Location)" -o table
+az vm list-skus --location "$(lab_value Location)" --size "$(lab_value VmSize)" --all -o json
 az provider show --namespace Microsoft.ContainerService --query registrationState -o tsv
 az provider show --namespace Microsoft.ServiceBus --query registrationState -o tsv
 ```
@@ -58,12 +61,15 @@ Check `restrictions` and zone support in the SKU output; a familiar VM name is n
 
 Check `kubectl version --client` as well. Its minor version must be within one minor of the selected API server throughout the exercise; use a matching client if the local installation is newer. The managed Gateway API bundle is selected by the AKS version, not installed independently from the newest upstream manifest.
 
-```powershell
-foreach ($provider in @(
-  'Microsoft.ContainerService','Microsoft.Network','Microsoft.ManagedIdentity',
-  'Microsoft.ContainerRegistry','Microsoft.KeyVault','Microsoft.ServiceBus',
-  'Microsoft.OperationalInsights','Microsoft.Insights'
-)) { az provider register --namespace $provider --wait }
+```bash
+Providers=(
+  Microsoft.ContainerService Microsoft.Network Microsoft.ManagedIdentity
+  Microsoft.ContainerRegistry Microsoft.KeyVault Microsoft.ServiceBus
+  Microsoft.OperationalInsights Microsoft.Insights
+)
+for provider in "${Providers[@]}"; do
+  az provider register --namespace "$provider" --wait
+done
 ```
 
 Record the selected version, region, OS SKU and quota evidence outside Git. Never select Azure Linux 2.0.
@@ -79,19 +85,20 @@ Save the chosen patch in `KubernetesVersion` in `local.settings.json` before dep
 <details>
 <summary>Solution</summary>
 
-```powershell
-.\scripts\Deploy-Foundation.ps1
+```bash
+bash ./scripts/deploy-foundation.sh
 # Inspect the what-if resource inventory and billable choices first.
-.\scripts\Deploy-Foundation.ps1 -Apply -Confirm
-. .\scripts\Use-Lab.ps1
-az aks show -g $Lab.ResourceGroup -n $Lab.ClusterName `
+# At the apply prompt, type the exact ResourceGroup from local.settings.json.
+bash ./scripts/deploy-foundation.sh --apply --confirm
+source ./scripts/use-lab.sh
+az aks show -g "$(lab_value ResourceGroup)" -n "$(lab_value ClusterName)" \
   --query '{version:kubernetesVersion,sku:sku,private:apiServerAccessProfile,network:networkProfile}' -o json
 ```
 
 Expected: provisioning succeeds; private cluster true; public FQDN disabled; Azure RBAC enabled; Overlay and Cilium selected. Inspect deployment operations if it fails:
 
-```powershell
-az deployment operation group list -g $Lab.ResourceGroup -n foundation `
+```bash
+az deployment operation group list -g "$(lab_value ResourceGroup)" -n foundation \
   --query "[?properties.provisioningState=='Failed'].properties.statusMessage" -o json
 ```
 
@@ -108,12 +115,13 @@ A newly created identity/role can need propagation. Inspect role scope and princ
 
 From the VNet-connected management host:
 
-```powershell
-az aks get-credentials -g $Lab.ResourceGroup -n $Lab.ClusterName --overwrite-existing
+```bash
+az aks get-credentials -g "$(lab_value ResourceGroup)" -n "$(lab_value ClusterName)" --overwrite-existing
 kubelogin convert-kubeconfig -l azurecli
-$fqdn = az aks show -g $Lab.ResourceGroup -n $Lab.ClusterName --query privateFqdn -o tsv
-Resolve-DnsName $fqdn
-Test-NetConnection $fqdn -Port 443
+fqdn=$(az aks show -g "$(lab_value ResourceGroup)" -n "$(lab_value ClusterName)" --query privateFqdn -o tsv)
+dig "$fqdn"
+getent ahostsv4 "$fqdn"
+timeout 10 bash -c 'exec 3<>/dev/tcp/$1/443' bash "$fqdn"
 kubectl config current-context
 kubectl auth can-i create deployments --namespace orders
 kubectl get nodes -L agentpool,topology.kubernetes.io/zone,kubernetes.azure.com/os-sku
@@ -132,17 +140,18 @@ From a host without VNet connectivity, the private endpoint should not be reacha
 <details>
 <summary>Solution</summary>
 
-Before lab 3, ACR's public endpoint remains enabled for authenticated bootstrap. From a Docker/Linux-build-capable workstation, grant yourself **AcrPush** at this registry only if not already authorized:
+Before lab 3, ACR's public endpoint remains enabled for authenticated bootstrap. From a Podman/Linux-build-capable workstation, grant yourself **AcrPush** at this registry only if not already authorized:
 
-```powershell
-$me = az ad signed-in-user show --query id -o tsv
-az role assignment create --assignee-object-id $me --assignee-principal-type User `
-  --role AcrPush --scope $Outputs.acrId.value
-az acr login --name $Lab.AcrName
-docker build --platform linux/amd64 --tag "$($Lab.RegistryServer)/order-app:$($Lab.ImageTag)" .\app
-docker push "$($Lab.RegistryServer)/order-app:$($Lab.ImageTag)"
-.\scripts\Render-Manifests.ps1
-kubectl apply -k .\rendered\base
+```bash
+me=$(az ad signed-in-user show --query id -o tsv)
+az role assignment create --assignee-object-id "$me" --assignee-principal-type User \
+  --role AcrPush --scope "$(output_value acrId)"
+bash ./scripts/connect-acr-podman.sh --registry-name "$(lab_value AcrName)" --registry-server "$(lab_value RegistryServer)"
+podman build --pull=always --platform linux/amd64 --file ./app/Containerfile \
+  --tag "$(lab_value RegistryServer)/order-app:$(lab_value ImageTag)" ./app
+podman push "$(lab_value RegistryServer)/order-app:$(lab_value ImageTag)"
+bash ./scripts/render-manifests.sh
+kubectl apply -k ./rendered/base
 kubectl rollout status deployment/order-api -n orders --timeout=300s
 kubectl rollout status deployment/order-worker -n orders --timeout=300s
 kubectl get pods -n orders -o wide
@@ -151,17 +160,17 @@ kubectl get pdb -n orders
 
 Use a unique image tag if repeating the build. Lab 4 replaces mutable lab tags with immutable references. ACR has no admin password; kubelet pulls use its own managed identity, not your human login.
 
-In a separate PowerShell window on the management host:
+In a separate Bash terminal on the management host:
 
-```powershell
+```bash
 kubectl port-forward -n orders service/order-api 8080:80
 ```
 
 Then:
 
-```powershell
-Invoke-RestMethod http://localhost:8080/healthz
-Invoke-RestMethod http://localhost:8080/readyz
+```bash
+curl --fail --show-error http://localhost:8080/healthz
+curl --fail --show-error http://localhost:8080/readyz
 ```
 
 Both return success. The root page links to the API explorer. Leave order submission for lab 2. A worker deployment without an HTTP readiness endpoint only proves the process stays running; business health requires queue and processing evidence later.
@@ -175,8 +184,8 @@ Both return success. The root page links to the API explorer. Leave order submis
 <details>
 <summary>Solution</summary>
 
-```powershell
-kubectl patch deployment order-api -n orders --type merge `
+```bash
+kubectl patch deployment order-api -n orders --type merge \
   -p '{"spec":{"template":{"spec":{"nodeSelector":{"agentpool":"missing"}}}}}'
 kubectl get pods -n orders
 kubectl get events -n orders --sort-by=.lastTimestamp
@@ -187,8 +196,8 @@ Expected: new pods Pending with no matching node selector. Old available replica
 
 **Recovery:**
 
-```powershell
-kubectl patch deployment order-api -n orders --type merge `
+```bash
+kubectl patch deployment order-api -n orders --type merge \
   -p '{"spec":{"template":{"spec":{"nodeSelector":{"agentpool":"apps"}}}}}'
 kubectl rollout status deployment/order-api -n orders --timeout=300s
 ```
@@ -247,7 +256,7 @@ Remove the injected selector and stop the port-forward when finished. Keep all r
 
 Complete task 6's recovery, then confirm the intended placement:
 
-```powershell
+```bash
 kubectl get deployment order-api -n orders -o jsonpath='{.spec.template.spec.nodeSelector.agentpool}'
 kubectl rollout status deployment/order-api -n orders --timeout=300s
 ```

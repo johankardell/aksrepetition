@@ -1,13 +1,17 @@
-[CmdletBinding()]
-param(
-    [Parameter(Mandatory)][ValidatePattern('^[a-z0-9.-]+$')][string]$OriginHost,
-    [Parameter(Mandatory)][string]$OutputDirectory,
-    [Parameter(Mandatory)][ValidatePattern('@sha256:[a-f0-9]{64}$')][string]$Image
-)
-$ErrorActionPreference = 'Stop'
-if ($Image -match "[`r`n]") { throw 'Image must be a single value.' }
-New-Item $OutputDirectory -ItemType Directory -Force | Out-Null
-@"
+#!/usr/bin/env bash
+set -euo pipefail
+# shellcheck source=../scripts/lib.sh
+source "$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../scripts" && pwd)/lib.sh"
+
+origin_host='' output_directory='' image=''
+parse_args "$@"
+[[ $origin_host =~ ^[a-z0-9.-]+$ ]] || die '--origin-host is required and must match ^[a-z0-9.-]+$.'
+[[ -n $output_directory ]] || die '--output-directory is required.'
+[[ $image =~ @sha256:[a-f0-9]{64}$ ]] || die '--image must end with @sha256: followed by 64 lowercase hex digits.'
+[[ $image != *$'\r'* && $image != *$'\n'* ]] || die 'Image must be a single value.'
+image_yaml=$(jq -n --arg image "$image" '$image')
+mkdir -p -- "$output_directory"
+cat > "$output_directory/origin.yaml" <<YAML
 apiVersion: v1
 kind: ConfigMap
 metadata:
@@ -17,15 +21,15 @@ data:
   default.conf: |
     server {
       listen 8443 ssl;
-      server_name $OriginHost;
+      server_name $origin_host;
       ssl_certificate /tls/tls.crt;
       ssl_certificate_key /tls/tls.key;
       ssl_protocols TLSv1.2 TLSv1.3;
       location / {
         proxy_pass http://order-api.orders.svc.cluster.local;
-        proxy_set_header Host `$host;
+        proxy_set_header Host \$host;
         proxy_set_header X-Forwarded-Proto https;
-        proxy_set_header X-Forwarded-For `$proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
       }
     }
 ---
@@ -49,7 +53,7 @@ spec:
         seccompProfile: {type: RuntimeDefault}
       containers:
         - name: proxy
-          image: $Image
+          image: $image_yaml
           ports: [{containerPort: 8443}]
           securityContext:
             allowPrivilegeEscalation: false
@@ -130,4 +134,4 @@ spec:
         - podSelector:
             matchLabels: {app: regional-origin}
       ports: [{protocol: TCP, port: 8080}]
-"@ | Set-Content (Join-Path $OutputDirectory 'origin.yaml')
+YAML

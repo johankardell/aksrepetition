@@ -2,7 +2,11 @@
 
 **Scenario.** Pods are Running, but customers report slow orders. Build evidence that separates HTTP acceptance, asynchronous completion, platform health and monitoring failure.
 
-**Prerequisites/re-entry.** Complete Lab 4 with `orders` and `orders-test` Flux Kustomizations Ready. Run PowerShell 7 at the root on private management connectivity. Re-read local configuration and the monitoring deployment outputs when returning. The platform operator needs AKS configuration/diagnostic permissions and role-assignment rights; the observer needs Monitoring Reader, Log Analytics Reader and Grafana Viewer at their respective resources. Deploying a Grafana resource does not by itself give dashboard access.
+**Prerequisites/re-entry.** Complete Lab 4 with `orders` and `orders-test` Flux Kustomizations Ready. Run Bash at the repository root on a Linux host with private management connectivity. Use `set -euo pipefail` in each terminal. Install Azure CLI, kubectl, kubelogin, Flux CLI, Git, GitHub CLI, `jq`, `curl` (supporting `--fail-with-body`), `python3`, and `openssl`. Re-read local configuration and the monitoring deployment outputs when returning. The platform operator needs AKS configuration/diagnostic permissions and role-assignment rights; the observer needs Monitoring Reader, Log Analytics Reader and Grafana Viewer at their respective resources. Deploying a Grafana resource does not by itself give dashboard access.
+
+Solutions continue in the same Bash terminal unless stated otherwise. `source ./scripts/use-lab.sh` sets `Lab` and `Outputs` to JSON strings and `Root` to the absolute repository root; `lab_value KEY` and `output_value KEY` read required values with `jq -er`. On re-entry, also reload `Monitor` with the deployment-output command in directive 2. Do not enable shell tracing (`set -x`) while handling telemetry connection strings or tokens.
+
+For a Lab 3 private CA, set both `SSL_CERT_FILE` and `CURL_CA_BUNDLE` to the same absolute approved CA-bundle path in every management/consumer terminal. This preserves certificate verification for the Python helpers and direct `curl` commands without modifying system trust. Never use `curl --insecure` to bypass trust failures.
 
 **Paths and scope.** API `/metrics` → managed `ama-metrics` agent → **Azure Monitor workspace** (Prometheus); container stdout/stderr + selected control-plane diagnostics → existing **Log Analytics workspace**; application Azure Monitor OpenTelemetry distro → workspace-based **Application Insights**; Grafana queries Prometheus using its own managed identity. An Azure Monitor workspace is **not** a Log Analytics workspace. The worker is not an HTTP metrics server; observe its processing through logs/traces and Service Bus metrics, not a nonexistent worker `/metrics`.
 
@@ -23,19 +27,20 @@
 <details>
 <summary>Solution</summary>
 
-```powershell
-. .\scripts\Use-Lab.ps1
+```bash
+set -euo pipefail
+source ./scripts/use-lab.sh
 flux get kustomizations
-foreach ($provider in 'Microsoft.Monitor','Microsoft.Dashboard','Microsoft.Insights','Microsoft.AlertsManagement') {
-    az provider register --namespace $provider --wait
-}
+for provider in Microsoft.Monitor Microsoft.Dashboard Microsoft.Insights Microsoft.AlertsManagement; do
+    az provider register --namespace "$provider" --wait
+done
 az provider show --namespace Microsoft.Dashboard --query "resourceTypes[?resourceType=='grafana'].locations" -o json
 az provider show --namespace Microsoft.Monitor --query "resourceTypes[?resourceType=='accounts'].locations" -o json
-az monitor diagnostic-settings categories list --resource $Outputs.clusterId.value -o table
-az aks show -g $Lab.ResourceGroup -n $Lab.ClusterName --query addonProfiles.omsagent -o json
+az monitor diagnostic-settings categories list --resource "$(output_value clusterId)" -o table
+az aks show -g "$(lab_value ResourceGroup)" -n "$(lab_value ClusterName)" --query addonProfiles.omsagent -o json
 ```
 
-Compare returned locations with `$Lab.Location` and the existing Log Analytics workspace location/support. The selected categories in `ops\monitoring.bicep` are `kube-audit-admin`, `kube-apiserver`, `kube-controller-manager` and `kube-scheduler`; each must appear in the cluster's category list. Check the existing `omsagent` profile is enabled and configured for managed-identity authentication.
+Compare returned locations with `$(lab_value Location)` and the existing Log Analytics workspace location/support. The selected categories in `ops/monitoring.bicep` are `kube-audit-admin`, `kube-apiserver`, `kube-controller-manager` and `kube-scheduler`; each must appear in the cluster's category list. Check the existing `omsagent` profile is enabled and configured for managed-identity authentication.
 
 `*.monitor.azure.com` covers regional handler and metrics ingestion endpoints in this sample. Compare the deployed Firewall policy with the approved desired state, not only DNS resolution: a resolvable endpoint can still be blocked on TCP 443.
 
@@ -52,19 +57,19 @@ Compare returned locations with `$Lab.Location` and the existing Log Analytics w
 <details>
 <summary>Solution</summary>
 
-```powershell
-$AlertEmail = Read-Host 'Approved recipient for synthetic lab alerts'
-az deployment group create -g $Lab.ResourceGroup -n monitoring `
-  --template-file .\ops\monitoring.bicep `
-  --parameters prefix=$Lab.Prefix location=$Lab.Location clusterName=$Lab.ClusterName `
-    workspaceId=$Outputs.workspaceId.value grafanaName=$Lab.GrafanaName `
-    viewerObjectId=$Lab.AdminGroupObjectId viewerPrincipalType=Group alertEmail=$AlertEmail
-$Monitor = az deployment group show -g $Lab.ResourceGroup -n monitoring --query properties.outputs -o json | ConvertFrom-Json
-az aks update -g $Lab.ResourceGroup -n $Lab.ClusterName --enable-azure-monitor-metrics `
-  --azure-monitor-workspace-resource-id $Monitor.metricsId.value
-kubectl -n kube-system get pods -o wide | Select-String 'ama-metrics|ama-logs'
+```bash
+read -r -p 'Approved recipient for synthetic lab alerts: ' AlertEmail
+az deployment group create -g "$(lab_value ResourceGroup)" -n monitoring \
+  --template-file ./ops/monitoring.bicep \
+  --parameters prefix="$(lab_value Prefix)" location="$(lab_value Location)" clusterName="$(lab_value ClusterName)" \
+    workspaceId="$(output_value workspaceId)" grafanaName="$(lab_value GrafanaName)" \
+    viewerObjectId="$(lab_value AdminGroupObjectId)" viewerPrincipalType=Group alertEmail="$AlertEmail"
+Monitor=$(az deployment group show -g "$(lab_value ResourceGroup)" -n monitoring --query properties.outputs -o json)
+az aks update -g "$(lab_value ResourceGroup)" -n "$(lab_value ClusterName)" --enable-azure-monitor-metrics \
+  --azure-monitor-workspace-resource-id "$(jq -er '.metricsId.value' <<< "$Monitor")"
+kubectl -n kube-system get pods -o wide | grep -E 'ama-metrics|ama-logs'
 kubectl get crd podmonitors.azmonitoring.coreos.com
-az rest --method get --url "$($Monitor.grafanaId.value)?api-version=2023-09-01" `
+az rest --method get --url "$(jq -er '.grafanaId.value' <<< "$Monitor")?api-version=2023-09-01" \
   --query '{version:properties.grafanaVersion,endpoint:properties.endpoint,identity:identity.principalId}'
 ```
 
@@ -87,20 +92,18 @@ Application Insights connection strings identify an ingestion resource; they are
 <details>
 <summary>Solution</summary>
 
-```powershell
-$insights = az rest --method get --url "$($Monitor.appInsightsId.value)?api-version=2020-02-02" | ConvertFrom-Json
-$connection = $insights.properties.ConnectionString
-if (-not $connection) { throw 'Application Insights connection string was not returned.' }
-try {
-    kubectl -n orders create secret generic orders-telemetry `
+```bash
+(
+    set -euo pipefail
+    trap 'unset connection insights' EXIT
+    insights=$(az rest --method get --url "$(jq -er '.appInsightsId.value' <<< "$Monitor")?api-version=2020-02-02")
+    connection=$(jq -er '.properties.ConnectionString | select(length > 0)' <<< "$insights")
+    kubectl -n orders create secret generic orders-telemetry \
       --from-literal="connection-string=$connection" --dry-run=client -o yaml | kubectl apply -f -
-} finally {
-    $connection = $null
-    $insights = $null
-}
-.\ops\Add-GitOpsFile.ps1 -Source .\ops\monitoring\podmonitor.yaml
-.\ops\Add-GitOpsFile.ps1 -Source .\ops\monitoring\telemetry-patch.yaml -Kind Patch
-kubectl kustomize .\gitops\clusters\primary\apps\orders
+)
+bash ./ops/add-gitops-file.sh --source ./ops/monitoring/podmonitor.yaml
+bash ./ops/add-gitops-file.sh --source ./ops/monitoring/telemetry-patch.yaml --kind Patch
+kubectl kustomize ./gitops/clusters/primary/apps/orders
 git switch -c enable-orders-telemetry
 git add gitops
 git commit -m "Scrape orders and enable correlated application telemetry"
@@ -110,7 +113,7 @@ gh pr create --base main --fill
 
 After review/merge:
 
-```powershell
+```bash
 git switch main
 git pull --ff-only
 flux reconcile kustomization orders --with-source
@@ -118,7 +121,7 @@ kubectl -n orders rollout status deployment/order-api --timeout=300s
 kubectl -n orders rollout status deployment/order-worker --timeout=300s
 kubectl -n orders get podmonitor.azmonitoring.coreos.com
 kubectl -n orders logs deployment/order-api --tail=40
-$Monitor.grafanaEndpoint.value
+jq -er '.grafanaEndpoint.value' <<< "$Monitor"
 ```
 
 **Evidence:** the image's existing `configure_azure_monitor()` executes when the new environment variable is present; both service roles now export spans. We do not enable automatic instrumentation on top of the already instrumented image (which would risk duplicate telemetry). The API PodMonitor uses **`azmonitoring.coreos.com/v1`**, not the OSS `monitoring.coreos.com/v1` group. It scrapes named port `http` every 30 seconds. Its companion NetworkPolicy allows kube-system agents to reach API port 8080; this trusts kube-system, not arbitrary workload namespaces. Tighten pod selectors after inspecting your actual managed-agent labels if needed.
@@ -138,39 +141,45 @@ $Monitor.grafanaEndpoint.value
 
 Start a management-only port-forward in a second terminal:
 
-```powershell
+```bash
+set -euo pipefail
 kubectl -n orders port-forward service/order-api 8081:80
 ```
 
 Then:
 
-```powershell
-$OrderId = "trace-$([guid]::NewGuid().ToString('N'))"
-$TraceId = [guid]::NewGuid().ToString('N')
-$SpanId = [guid]::NewGuid().ToString('N').Substring(0,16)
-Invoke-RestMethod http://127.0.0.1:8081/orders -Method Post -ContentType application/json `
-  -Headers @{ traceparent = "00-$TraceId-$SpanId-01" } `
-  -Body (@{ id=$OrderId; item='synthetic-trace' } | ConvertTo-Json -Compress)
-kubectl -n orders logs deployment/order-worker --since=5m | Select-String $OrderId
-(Invoke-WebRequest http://127.0.0.1:8081/metrics).Content | Select-String 'orders_http'
-.\ops\Invoke-OrderLoad.ps1 -BaseUri http://127.0.0.1:8081 -Count 60 -Concurrency 2 -OutputPath .artifacts\baseline.json
+```bash
+OrderId="trace-$(openssl rand -hex 16)"
+TraceId=$(openssl rand -hex 16)
+SpanId=$(openssl rand -hex 8)
+Body=$(jq -nc --arg id "$OrderId" '{id:$id,item:"synthetic-trace"}')
+curl --fail-with-body --silent --show-error http://127.0.0.1:8081/orders \
+  --header 'Content-Type: application/json' --header "traceparent: 00-$TraceId-$SpanId-01" \
+  --data "$Body"
+kubectl -n orders logs deployment/order-worker --since=5m | grep -F "$OrderId"
+curl --fail-with-body --silent --show-error http://127.0.0.1:8081/metrics | grep -F orders_http
+bash ./ops/invoke-order-load.sh --base-uri http://127.0.0.1:8081 --count 60 --concurrency 2 --output-path .artifacts/baseline.json
 ```
 
 Allow several minutes for ingestion, then query the existing workspace:
 
-```powershell
-.\ops\Invoke-LogsQuery.ps1 -Query @"
+```bash
+Query=$(cat <<EOF
 union isfuzzy=true AppRequests, AppDependencies, AppTraces
 | where OperationId == '$TraceId'
 | project TimeGenerated, Type, AppRoleName, OperationId, ParentId,
           Name=column_ifexists('Name',''), Message=column_ifexists('Message','')
 | order by TimeGenerated asc
-"@
-.\ops\Invoke-LogsQuery.ps1 -Query @"
+EOF
+)
+bash ./ops/invoke-logs-query.sh --query "$Query"
+Query=$(cat <<EOF
 ContainerLogV2
 | where PodNamespace == 'orders' and LogMessage has '$OrderId'
 | project TimeGenerated, PodName, LogMessage
-"@
+EOF
+)
+bash ./ops/invoke-logs-query.sh --query "$Query"
 ```
 
 **Evidence:** the API's `orders.enqueue` and worker's `orders.process` share an OperationId through Service Bus application properties; the parent span can be traced across asynchronous processing. The worker log identifies the synthetic order and reports `durable:false` before Lab 8. Missing shared IDs suggest dropped application properties, a missing OTel initializer or sampling, not necessarily Service Bus failure. If automatic HTTP instrumentation differs in the installed distro, first correlate the explicitly created enqueue/process spans; verify FastAPI auto-instrumentation before claiming client-to-worker trace continuity.
@@ -190,39 +199,41 @@ Use span timestamps/durations and the matching processed log to compare enqueue 
 <details>
 <summary>Solution</summary>
 
-Open the authenticated Grafana endpoint printed in directive 3. In **Explore**, select the provisioned Azure Monitor workspace Prometheus data source. Run these exact PromQL expressions (copying via PowerShell is convenient on Windows):
+Open the authenticated Grafana endpoint printed in directive 3. In **Explore**, select the provisioned Azure Monitor workspace Prometheus data source. Run these exact PromQL expressions (the Bash commands below print them for copying):
 
-```powershell
-$AvailabilityQuery = @'
+```bash
+AvailabilityQuery=$(cat <<'EOF'
 1 - (sum(rate(orders_http_requests_total{namespace="orders",status=~"5.."}[5m])) or vector(0))
     / clamp_min(sum(rate(orders_http_requests_total{namespace="orders"}[5m])), 0.001)
-'@
-$LatencyQuery = @'
+EOF
+)
+LatencyQuery=$(cat <<'EOF'
 histogram_quantile(0.95, sum by (le) (rate(orders_http_duration_seconds_bucket{namespace="orders"}[5m])))
-'@
-$AvailabilityQuery
-$LatencyQuery
-az monitor metrics list --resource $Outputs.serviceBusId.value `
-  --metric ActiveMessages DeadletteredMessages --interval PT1M --aggregation Average `
+EOF
+)
+printf '%s\n' "$AvailabilityQuery" "$LatencyQuery"
+az monitor metrics list --resource "$(output_value serviceBusId)" \
+  --metric ActiveMessages DeadletteredMessages --interval PT1M --aggregation Average \
   --filter "EntityName eq 'orders'" -o json
 ```
 
-**Evidence:** no result means “no series,” not 100% availability. With no failures, the `or vector(0)` branch avoids an empty error numerator. The alert uses 5xx ratio, p95 and a separate missing-metrics rule; action-group email requires a **real firing condition**, not merely a deployed rule. The availability query sees only requests reaching the API. A gateway outage or no Ready endpoints may never increment it. Test the real Lab 3 HTTPS URL from the consumer network with `Invoke-OrderLoad.ps1` and compare its measured availability/p95 to the port-forward baseline; trust the external measurement for user impact. Do not disable TLS certificate verification.
+**Evidence:** no result means “no series,” not 100% availability. With no failures, the `or vector(0)` branch avoids an empty error numerator. The alert uses 5xx ratio, p95 and a separate missing-metrics rule; action-group email requires a **real firing condition**, not merely a deployed rule. The availability query sees only requests reaching the API. A gateway outage or no Ready endpoints may never increment it. Test the real Lab 3 HTTPS URL from the consumer network with `invoke-order-load.sh` and compare its measured availability/p95 to the port-forward baseline; trust the external measurement for user impact. Do not disable TLS certificate verification.
 
 Use Grafana Editor only if you need to save a dashboard; Viewer can query but cannot author. Ask the platform operator for a scoped role, not global admin. In Azure Monitor Alerts, record rule name, fired/resolved UTC time, affected SLI, and received email. For a production SLO, add gateway/external-probe telemetry and multi-window error-budget burn rules; these five-minute lab thresholds are deliberately simpler.
 
 With directive 4's port-forward still running, capture a five-minute local interval. Then run the HTTPS measurement from the consumer-connected host with the repository scripts available:
 
-```powershell
-.\ops\Invoke-OrderLoad.ps1 -BaseUri http://127.0.0.1:8081 -Operation Browse `
-  -Count 2000 -Concurrency 1 -DurationSeconds 300 -DelayMilliseconds 200 `
-  -OutputPath .artifacts\slo-local.json
-$UserUri = (Read-Host 'Trusted HTTPS application URL from lab 3').TrimEnd('/')
-.\ops\Invoke-OrderLoad.ps1 -BaseUri $UserUri -Operation Browse `
-  -Count 2000 -Concurrency 1 -DurationSeconds 300 -DelayMilliseconds 200 `
-  -OutputPath .artifacts\slo-external.json
-Get-Content .artifacts\slo-external.json -Raw | ConvertFrom-Json |
-  Select-Object startedUtc,elapsedSeconds,sent,successful,availabilityPercent,p95Milliseconds
+```bash
+bash ./ops/invoke-order-load.sh --base-uri http://127.0.0.1:8081 --operation Browse \
+  --count 2000 --concurrency 1 --duration-seconds 300 --delay-milliseconds 200 \
+  --output-path .artifacts/slo-local.json
+read -r -p 'Trusted HTTPS application URL from lab 3: ' UserUri
+UserUri=${UserUri%/}
+[[ "$UserUri" == https://* ]] || { printf '%s\n' 'Use the trusted HTTPS application URL.' >&2; exit 1; }
+bash ./ops/invoke-order-load.sh --base-uri "$UserUri" --operation Browse \
+  --count 2000 --concurrency 1 --duration-seconds 300 --delay-milliseconds 200 \
+  --output-path .artifacts/slo-external.json
+jq '{startedUtc,elapsedSeconds,sent,successful,availabilityPercent,p95Milliseconds}' .artifacts/slo-external.json
 ```
 
 If using a separate consumer host, retain its output there and carry only the synthetic measurement artifact into the execution record. The count/rate combination keeps request starts available throughout the 300-second window; in-flight requests can finish later. Query Grafana for each run's corresponding interval, not a different idle period.
@@ -246,17 +257,20 @@ The configured rules are `OrdersHighErrorRatio`, `OrdersHighLatency` and `Orders
 
 Run the following in a second terminal while generating a bounded `Browse` load against the **real HTTPS application URL** in the first. Use a pod-specific exec process, not a privileged stress image:
 
-```powershell
-. .\scripts\Use-Lab.ps1
-$ApiPod = kubectl -n orders get pods -l app=order-api -o 'jsonpath={.items[0].metadata.name}'
-kubectl -n orders exec $ApiPod -c api -- python -c `
+```bash
+set -euo pipefail
+source ./scripts/use-lab.sh
+ApiPod=$(kubectl -n orders get pods -l app=order-api -o 'jsonpath={.items[0].metadata.name}')
+kubectl -n orders exec "$ApiPod" -c api -- python -c \
   "import time; end=time.monotonic()+90; exec('while time.monotonic()<end:\n sum(range(10000))')"
 ```
 
-```powershell
-$UserUri = (Read-Host 'Trusted HTTPS application URL from lab 3').TrimEnd('/')
-.\ops\Invoke-OrderLoad.ps1 -BaseUri $UserUri -Operation Browse -Count 600 `
-  -Concurrency 4 -DurationSeconds 120 -DelayMilliseconds 300 -OutputPath .artifacts\cpu-impact.json
+```bash
+read -r -p 'Trusted HTTPS application URL from lab 3: ' UserUri
+UserUri=${UserUri%/}
+[[ "$UserUri" == https://* ]] || { printf '%s\n' 'Use the trusted HTTPS application URL.' >&2; exit 1; }
+bash ./ops/invoke-order-load.sh --base-uri "$UserUri" --operation Browse --count 600 \
+  --concurrency 4 --duration-seconds 120 --delay-milliseconds 300 --output-path .artifacts/cpu-impact.json
 kubectl -n orders top pods --containers
 kubectl top nodes
 ```
@@ -282,21 +296,20 @@ Browse does not enqueue an order, so a slowdown aligned with the injected CPU pr
 
 Use the platform incident role and preserve the source of truth:
 
-```powershell
-flux suspend kustomization orders
-try {
-    kubectl -n orders patch deployment order-api --type=json `
+```bash
+(
+    set -euo pipefail
+    flux suspend kustomization orders
+    trap 'Status=$?; flux resume kustomization orders || Status=$?; flux reconcile kustomization orders --with-source || Status=$?; exit "$Status"' EXIT
+    kubectl -n orders patch deployment order-api --type=json \
       -p '[{"op":"replace","path":"/spec/template/spec/containers/0/readinessProbe/httpGet/path","value":"/deliberately-missing"}]'
-    Start-Sleep -Seconds 40
+    sleep 40
     kubectl -n orders get pods -l app=order-api
     kubectl -n orders get endpointslices -l kubernetes.io/service-name=order-api
     kubectl -n orders get events --sort-by=.lastTimestamp
-    .\ops\Invoke-OrderLoad.ps1 -BaseUri $UserUri -Operation Browse -Count 20 `
-      -Concurrency 1 -OutputPath .artifacts\readiness-impact.json
-} finally {
-    flux resume kustomization orders
-    flux reconcile kustomization orders --with-source
-}
+    bash ./ops/invoke-order-load.sh --base-uri "$UserUri" --operation Browse --count 20 \
+      --concurrency 1 --output-path .artifacts/readiness-impact.json
+)
 kubectl -n orders rollout status deployment/order-api --timeout=300s
 ```
 
@@ -319,27 +332,24 @@ The application also supports `FAIL_READINESS=true`, which makes the **valid** `
 
 Use a deliberately nonexistent Service Bus queue rather than deleting the real queue or its messages. API credential/host/network remain intact:
 
-```powershell
-flux suspend kustomization orders
-try {
+```bash
+(
+    set -euo pipefail
+    flux suspend kustomization orders
+    trap 'Status=$?; kubectl -n orders set env deployment/order-api QUEUE_NAME- || Status=$?; flux resume kustomization orders || Status=$?; flux reconcile kustomization orders --with-source || Status=$?; exit "$Status"' EXIT
     kubectl -n orders set env deployment/order-api QUEUE_NAME=orders-intentionally-absent
     kubectl -n orders rollout status deployment/order-api --timeout=300s
-    .\ops\Invoke-OrderLoad.ps1 -BaseUri $UserUri -Count 1000 -Concurrency 2 `
-      -DurationSeconds 480 -DelayMilliseconds 1000 -TimeoutSeconds 30 `
-      -OutputPath .artifacts\dependency-impact.json
+    bash ./ops/invoke-order-load.sh --base-uri "$UserUri" --count 1000 --concurrency 2 \
+      --duration-seconds 480 --delay-milliseconds 1000 --timeout-seconds 30 \
+      --output-path .artifacts/dependency-impact.json
     kubectl -n orders logs deployment/order-api --since=10m --tail=100
     kubectl -n orders top pods
-} finally {
-    # Remove the extra live env entry; it was not present in Git's envFrom-based configuration.
-    kubectl -n orders set env deployment/order-api QUEUE_NAME-
-    flux resume kustomization orders
-    flux reconcile kustomization orders --with-source
-}
+)
 kubectl -n orders rollout status deployment/order-api --timeout=300s
-.\ops\Invoke-OrderLoad.ps1 -BaseUri $UserUri -Count 20 -Concurrency 1 -OutputPath .artifacts\recovered.json
+bash ./ops/invoke-order-load.sh --base-uri "$UserUri" --count 20 --concurrency 1 --output-path .artifacts/recovered.json
 ```
 
-**Evidence:** backend authorization/entity-not-found errors in traces/logs, failed or timed-out user requests, and low-to-normal CPU distinguish this from directive 6. A missing queue can produce authorization-style errors because the identity's role is scoped to the existing queue. Do not “fix” it by granting Service Bus Data Owner. The eight-minute bounded run is long enough for a five-minute evaluation plus two-minute hold when 5xx reach the application metrics; retain alert email and fired/resolved history. If client timeouts occur before the server emits 5xx, use user-path evidence and dependency traces; do not claim the Prometheus error rule fired without evidence. Retry evaluation after requests finish, verify scrape health, and compare the latency rule. The `finally` block explicitly removes the injected env entry before resuming Git desired state, because server-side apply may preserve a newly added field owned by another manager. SDK retries can outlive individual clients.
+**Evidence:** backend authorization/entity-not-found errors in traces/logs, failed or timed-out user requests, and low-to-normal CPU distinguish this from directive 6. A missing queue can produce authorization-style errors because the identity's role is scoped to the existing queue. Do not “fix” it by granting Service Bus Data Owner. The eight-minute bounded run is long enough for a five-minute evaluation plus two-minute hold when 5xx reach the application metrics; retain alert email and fired/resolved history. If client timeouts occur before the server emits 5xx, use user-path evidence and dependency traces; do not claim the Prometheus error rule fired without evidence. Retry evaluation after requests finish, verify scrape health, and compare the latency rule. The subshell's `EXIT` trap explicitly removes the injected env entry before resuming Git desired state, because server-side apply may preserve a newly added field owned by another manager. It attempts every recovery command and reports failures. After a host loss or forced termination, run those recovery commands first on re-entry. SDK retries can outlive individual clients.
 
 </details>
 
@@ -358,28 +368,36 @@ Retain telemetry resources for labs 6–10 and stop port-forwards when done. Fin
 
 The platform operator owns the managed-agent ConfigMap outside the application Kustomization:
 
-```powershell
-kubectl apply -f .\ops\monitoring\container-logs.yaml
-kubectl -n kube-system get pods | Select-String 'ama-logs'
-az monitor log-analytics workspace table update -g $Lab.ResourceGroup `
-  --workspace-name $Lab.WorkspaceName --name ContainerLogV2 --retention-time 30 --total-retention-time 30
-.\ops\Invoke-LogsQuery.ps1 -Query @'
+```bash
+kubectl apply -f ./ops/monitoring/container-logs.yaml
+kubectl -n kube-system get pods | grep -F ama-logs
+az monitor log-analytics workspace table update -g "$(lab_value ResourceGroup)" \
+  --workspace-name "$(lab_value WorkspaceName)" --name ContainerLogV2 --retention-time 30 --total-retention-time 30
+Query=$(cat <<'EOF'
 Usage
 | where TimeGenerated > ago(24h) and IsBillable == true
 | summarize IngestedMB=sum(Quantity) by DataType
 | order by IngestedMB desc
-'@
+EOF
+)
+bash ./ops/invoke-logs-query.sh --query "$Query"
 ```
 
 **Evidence:** log-agent configuration has no parse errors; `KubeMonAgentEvents` reports accepted config after its reporting interval. This ConfigMap is for **Standard** clusters; Automatic with managed system node pools has different support. We exclude kube-system/gatekeeper stdout/stderr and disable environment-variable collection; that does not disable selected control-plane audit diagnostics. Review the security/incident trade-off before excluding logs.
 
 For ongoing operation change **both** `OTEL_TRACES_SAMPLER_ARG` values in the Git-owned `telemetry-patch.yaml` from `"1.0"` to `"0.1"` through a PR, merge and reconcile. Keep 100% while proving cross-service traces. Sampling is not applied to the Prometheus SLIs. Inspect `ItemCount` in Application Insights tables; don't infer actual sampling from manifest text alone. Never put order IDs, emails or raw URLs in metric labels; current labels have bounded method/status cardinality.
 
-```powershell
+```bash
 git switch -c reduce-trace-sampling
-$patchPath = '.\gitops\clusters\primary\apps\orders\telemetry-patch.yaml'
-$patch = (Get-Content $patchPath -Raw).Replace('value: "1.0"', 'value: "0.1"')
-Set-Content $patchPath $patch -Encoding utf8
+python3 - <<'PY'
+from pathlib import Path
+path = Path("gitops/clusters/primary/apps/orders/telemetry-patch.yaml")
+text = path.read_text()
+if text.count('value: "1.0"') != 2:
+    raise SystemExit("Expected both services to have 100% trace sampling; inspect the patch.")
+path.write_text(text.replace('value: "1.0"', 'value: "0.1"'))
+PY
+kubectl kustomize ./gitops/clusters/primary/apps/orders
 git add gitops
 git commit -m "Reduce trace sampling after diagnostic proof"
 git push -u origin HEAD
@@ -392,26 +410,30 @@ flux reconcile kustomization orders --with-source
 
 After the agents' reporting/ingestion interval, inspect configuration events and verify sampling using newly generated traffic:
 
-```powershell
-.\ops\Invoke-LogsQuery.ps1 -Query @'
+```bash
+Query=$(cat <<'EOF'
 KubeMonAgentEvents
 | where TimeGenerated > ago(1h)
 | project TimeGenerated, Computer, Severity, Message
 | order by TimeGenerated desc
-'@
-.\ops\Invoke-OrderLoad.ps1 -BaseUri $UserUri -Count 100 -Concurrency 2 `
-  -OutputPath .artifacts\sampling-check.json
-.\ops\Invoke-LogsQuery.ps1 -Query @'
+EOF
+)
+bash ./ops/invoke-logs-query.sh --query "$Query"
+bash ./ops/invoke-order-load.sh --base-uri "$UserUri" --count 100 --concurrency 2 \
+  --output-path .artifacts/sampling-check.json
+Query=$(cat <<'EOF'
 union isfuzzy=true AppRequests, AppDependencies, AppTraces
 | where TimeGenerated > ago(30m)
 | where AppRoleName in ('order-api', 'order-worker')
 | summarize StoredRows=count(), RepresentedItems=sum(ItemCount) by AppRoleName, ItemCount
-'@
+EOF
+)
+bash ./ops/invoke-logs-query.sh --query "$Query"
 ```
 
 Wait for ingestion and narrow the time filter to after the sampling rollout when interpreting the result. Weighted `ItemCount` values can demonstrate sampling; a low-volume run with no sampled rows is inconclusive, not proof of failed processing. Compare repeated billable `Usage` windows before/after the change, accounting for traffic and ingestion delay, rather than promising a fixed cost reduction.
 
-Retain Prometheus/Grafana/Logs/Application Insights for labs 6–10. Stop port-forwards with Ctrl+C. Final cleanup: remove the telemetry patch/PodMonitor through Git, reconcile, delete the `orders-telemetry` Secret, disable the metrics add-on with `az aks update -g $Lab.ResourceGroup -n $Lab.ClusterName --disable-azure-monitor-metrics`, and use root resource cleanup for telemetry resources. Do not delete the shared Log Analytics workspace mid-course. Workspace retention and Grafana billing remain even when AKS is stopped; daily ingestion caps/budget emails are not guaranteed spending caps.
+Retain Prometheus/Grafana/Logs/Application Insights for labs 6–10. Stop port-forwards with Ctrl+C. Final cleanup: remove the telemetry patch/PodMonitor through Git, reconcile, delete the `orders-telemetry` Secret, disable the metrics add-on with `az aks update -g "$(lab_value ResourceGroup)" -n "$(lab_value ClusterName)" --disable-azure-monitor-metrics`, and use root resource cleanup for telemetry resources. Do not delete the shared Log Analytics workspace mid-course. Workspace retention and Grafana billing remain even when AKS is stopped; daily ingestion caps/budget emails are not guaranteed spending caps.
 
 </details>
 

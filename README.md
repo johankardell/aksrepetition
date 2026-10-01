@@ -30,7 +30,7 @@ The sample has **no end-user authentication**. Use only synthetic orders and pri
 
 The baseline enables private AKS management immediately. ACR, Service Bus and Key Vault start with authenticated public data endpoints during bootstrap; lab 3 creates Private Link and disables those public endpoints. This deliberate intermediate state is **not the finished enterprise baseline**. Do not import business data or treat lab 1 alone as production-ready.
 
-Lab 3 also establishes private ingress DNS and explicit current-user certificate trust on the Windows management workstation. Later PowerShell load exercises depend on that ordinary HTTPS path; the earlier one-off `curl --resolve --cacert` check alone does not satisfy it.
+Lab 3 also establishes private ingress DNS and an explicitly approved certificate bundle on the Linux management host. Later Bash load exercises depend on that ordinary HTTPS path; the earlier one-off `curl --resolve --cacert` check alone does not satisfy it.
 
 ## Before spending anything
 
@@ -55,39 +55,65 @@ Create Azure Cost Management budgets and alerts for the subscription/resource gr
 
 ## Tooling, access, and private connectivity
 
-Use PowerShell **7.4+**, Azure CLI **2.86+** (Gateway API flags), Bicep, Git, `kubectl` within the supported one-minor skew of the API server, `kubelogin`, Helm, and Docker with **Linux container build capability** on the build machine. Later guides identify Flux CLI, GitHub runner, and Azure CLI extension prerequisites. Do not install preview extensions as a workaround for an unsupported required feature.
+Use Linux with Bash **5+**, GNU coreutils/findutils, `jq`, Python **3.12+**, `curl`, OpenSSL **3+**, OpenSSH (`ssh-keygen`), `ca-certificates`, `dig` (dnsutils/bind-utils), Azure CLI **2.86+** (Gateway API flags), Bicep, Git, `kubectl` within the supported one-minor skew of the API server, `kubelogin`, Helm, and Podman with **Linux container build capability** on the build machine. Later guides identify Flux CLI, GitHub runner, and Azure CLI extension prerequisites. Do not install preview extensions as a workaround for an unsupported required feature.
 
 An Azure Contributor role alone cannot create RBAC assignments. The bootstrap operator needs resource deployment plus role-assignment authority at the relevant scopes, for example Contributor and Role Based Access Control Administrator in the dedicated subscription. Use an existing Entra security group you belong to for the lab cluster administrator group. Group creation requires separate directory rights; subscription ownership does not grant them. Later labs use separate identities with narrower permissions.
 
-**Management connectivity is a hard prerequisite, not a public-API fallback.** Use either a VPN/ExpressRoute-connected workstation or a host in the lab management subnet. The host needs PowerShell/CLI/kubelogin/kubectl and DNS resolution of the private AKS zone. A standard public Cloud Shell session or a public GitHub hosted runner cannot reach the private API/ACR by default. If no management path exists, provision your organization's approved VPN or private host/Bastion pattern first, using [AKS private-cluster guidance](https://learn.microsoft.com/azure/aks/private-clusters).
+**Management connectivity is a hard prerequisite, not a public-API fallback.** Use either a VPN/ExpressRoute-connected Linux workstation or a Linux host in the lab management subnet. The host needs Bash/CLI/kubelogin/kubectl and DNS resolution of the private AKS zone. A standard public Cloud Shell session or a public GitHub hosted runner cannot reach the private API/ACR by default. If no management path exists, provision your organization's approved VPN or private host/Bastion pattern first, using [AKS private-cluster guidance](https://learn.microsoft.com/azure/aks/private-clusters).
 
-For a peered management VNet, link the AKS private DNS zone and the three service private DNS zones to that VNet, or configure conditional forwarding through Azure DNS Private Resolver. Peering alone does not configure DNS. Do not expose TCP 3389/22 publicly to shortcut access. Build on a Docker-capable Linux host or workstation that can also resolve and reach private ACR after lab 3.
+For a peered management VNet, link the AKS private DNS zone and the three service private DNS zones to that VNet, or configure conditional forwarding through Azure DNS Private Resolver. Peering alone does not configure DNS. Do not expose TCP 3389/22 publicly to shortcut access. Build on a Podman-capable Linux host or workstation that can also resolve and reach private ACR after lab 3.
 
 ## Bootstrap configuration
 
-From this folder:
+From this folder, create the ignored local configuration once. Do not overwrite an existing checkout's settings:
 
-```powershell
-Copy-Item .\local.settings.example.json .\local.settings.json
+```bash
+set -euo pipefail
+if [[ -e ./local.settings.json ]]; then
+  printf 'Keep existing local.settings.json; review it before resuming.\n'
+else
+  umask 077
+  cat > ./local.settings.json <<'JSON'
+{
+  "SubscriptionId": "REPLACE",
+  "TenantId": "REPLACE",
+  "AdminGroupObjectId": "REPLACE",
+  "ResourceGroup": "REPLACE",
+  "Prefix": "REPLACE",
+  "Location": "REPLACE",
+  "SecondaryLocation": "REPLACE",
+  "VmSize": "Standard_D4ds_v5",
+  "KubernetesVersion": "REPLACE",
+  "Namespace": "orders",
+  "ImageTag": "v1",
+  "Hostname": "REPLACE"
+}
+JSON
+fi
+```
+
+Edit the configuration before running the following block. Use an owned private application FQDN for `Hostname`; select an approved secondary region distinct from `Location` for lab 10. Discover a supported regional Kubernetes patch using the lab 1 preflight commands.
+
+```bash
 # Edit all REPLACE values, choose regions and a unique 4-12 character lowercase prefix.
-$settings = Get-Content .\local.settings.json -Raw | ConvertFrom-Json
-az login --tenant $settings.TenantId
-az account set --subscription $settings.SubscriptionId
+settings=$(jq -e . ./local.settings.json)
+az login --tenant "$(jq -er .TenantId <<<"$settings")"
+az account set --subscription "$(jq -er .SubscriptionId <<<"$settings")"
 az aks get-versions --location swedencentral -o table
 az vm list-usage --location swedencentral -o table
 az vm list-skus --location swedencentral --size Standard_D4ds_v5 --all -o table
 # Select a supported GA patch with a supported upgrade path for lab 9; save it in settings.
-az group create --name $settings.ResourceGroup --location $settings.Location `
+az group create --name "$(jq -er .ResourceGroup <<<"$settings")" --location "$(jq -er .Location <<<"$settings")" \
   --tags purpose=aks-enterprise-refresher environment=lab
-. .\scripts\Use-Lab.ps1
-New-Item .\rendered\keys -ItemType Directory -Force | Out-Null
+source ./scripts/use-lab.sh
+mkdir -p ./rendered/keys
 # Only on first setup: ssh-keygen prompts for a passphrase. Do not overwrite an existing key.
-ssh-keygen -t rsa -b 4096 -f .\rendered\keys\aks
+ssh-keygen -t rsa -b 4096 -f ./rendered/keys/aks
 ```
 
 Example regions are **not** an availability guarantee. Check AKS, Service Bus Premium, the VM family, managed monitoring, PostgreSQL, backup and Fleet requirements before choosing. Check current AKS versions with [the AKS release tracker](https://releases.aks.azure.com/); a listed preview is not a supported GA choice. If quota or regional compatibility blocks a required path, stop and resolve it rather than silently substituting a different service.
 
-`Use-Lab.ps1` verifies your Azure context; it never silently changes subscriptions. It obtains generated resource names from the `foundation` deployment. Do not commit local settings, credentials, rendered certificates or evidence containing personal data.
+`use-lab.sh` verifies your Azure context; it never silently changes subscriptions. Source it to load `Lab` and `Outputs` as JSON strings. Read settings with `lab_value Prefix` and deployment outputs with `output_value registryServer`; use `jq` for other JSON responses. Execute other helpers with `bash ./scripts/<name>.sh --kebab-case-option value`; script filenames use lowercase kebab-case. The helpers obtain generated resource names from the `foundation` deployment. Do not commit local settings, credentials, rendered certificates or evidence containing personal data.
 
 The RSA public key supplies the supported node Linux profile; the passphrase-protected private key is for controlled break-glass access only, not application authentication. Nodes have no public SSH endpoint. Disabling local Kubernetes administrator credentials is separate from node SSH configuration. Do not enable preview SSH features simply to remove this bootstrap input.
 
@@ -132,15 +158,15 @@ References: [AKS baseline](https://learn.microsoft.com/azure/architecture/refere
 
 ## Pausing, resuming, and final cleanup
 
-Save evidence of each lab's exit criteria and Git commit once GitOps exists. Reconnect with `Use-Lab.ps1`, verify the current cluster context, and read the next lab's prerequisites rather than rerunning all bootstrap commands. Remove temporary fault injections before pausing.
+Save evidence of each lab's exit criteria and Git commit once GitOps exists. Reconnect with `use-lab.sh`, verify the current cluster context, and read the next lab's prerequisites rather than rerunning all bootstrap commands. Remove temporary fault injections before pausing.
 
 Do not delete cumulative resources after individual labs. If you ran lab 11, complete its Workspace and GPU-pool cleanup before pausing or final teardown. Labs 12 and 13 use their own resource groups; complete each guide's teardown instead of leaving specialist node pools or storage resources running. At final teardown, follow lab 10 and lab 8 cleanup first: remove Fleet membership and global routing, stop/delete backup protection using the documented retention process, remove diagnostic/monitoring associations and external role assignments, and handle database/volume backups intentionally. Inspect every resource group before deletion:
 
-```powershell
-. .\scripts\Use-Lab.ps1
-az resource list --resource-group $Lab.ResourceGroup -o table
+```bash
+source ./scripts/use-lab.sh
+az resource list --resource-group "$(lab_value ResourceGroup)" -o table
 # Only after confirming this is the dedicated disposable group and retaining required evidence:
-az group delete --name $Lab.ResourceGroup
+az group delete --name "$(lab_value ResourceGroup)"
 ```
 
 The Azure command prompts for confirmation. Repeat only for explicitly identified secondary/comparison groups, never for a shared subscription or wildcard set. Key Vault purge protection deliberately prevents immediate purge/name reuse. Retained backup data, registries, snapshots, Grafana, public IPs, DNS zones, runners, and resources outside the primary group need their own cleanup. Check Cost Management and Resource Graph afterward; deleting Kubernetes namespaces is not Azure teardown.

@@ -2,7 +2,7 @@
 
 **Level:** intermediate+. **Scenario:** security rejects connection strings and a shared application identity. Demonstrate separately authorized API/worker access and explain what actually happens during token exchange.
 
-**Prerequisite:** lab 1 healthy, no Flux reconciliation yet. Keep the private management connection and API port-forward. All resource names come from `. .\scripts\Use-Lab.ps1`. Additional cost is limited to synthetic traffic and secret operations on existing resources.
+**Prerequisite:** lab 1 healthy, no Flux reconciliation yet. Keep the private management connection and API port-forward. Run Bash at the repository root; all resource names come from `source ./scripts/use-lab.sh`. Additional cost is limited to synthetic traffic and secret operations on existing resources.
 
 ## Directives
 
@@ -13,12 +13,13 @@
 <details>
 <summary>Solution</summary>
 
-```powershell
-. .\scripts\Use-Lab.ps1
-az identity federated-credential list -g $Lab.ResourceGroup --identity-name "$($Lab.Prefix)-api" -o json
-az identity federated-credential list -g $Lab.ResourceGroup --identity-name "$($Lab.Prefix)-worker" -o json
-az role assignment list --assignee $Outputs.apiPrincipalId.value --all -o table
-az role assignment list --assignee $Outputs.workerPrincipalId.value --all -o table
+```bash
+set -euo pipefail
+source ./scripts/use-lab.sh
+az identity federated-credential list -g "$(lab_value ResourceGroup)" --identity-name "$(lab_value Prefix)-api" -o json
+az identity federated-credential list -g "$(lab_value ResourceGroup)" --identity-name "$(lab_value Prefix)-worker" -o json
+az role assignment list --assignee "$(output_value apiPrincipalId)" --all -o table
+az role assignment list --assignee "$(output_value workerPrincipalId)" --all -o table
 kubectl get serviceaccounts -n orders -o yaml
 ```
 
@@ -26,10 +27,10 @@ Verify issuer equals the cluster OIDC issuer, audience is `api://AzureADTokenExc
 
 Do not print projected tokens. Inspect only the injected environment variable names and projected volume configuration:
 
-```powershell
+```bash
 kubectl get deployment order-api -n orders -o yaml
-$pod = kubectl get pod -n orders -l app=order-api -o jsonpath='{.items[0].metadata.name}'
-kubectl get pod $pod -n orders -o jsonpath='{.spec.containers[0].env}'
+pod=$(kubectl get pod -n orders -l app=order-api -o jsonpath='{.items[0].metadata.name}')
+kubectl get pod "$pod" -n orders -o jsonpath='{.spec.containers[0].env}'
 ```
 
 The admission webhook acts on **pods**, so look at the actual pod for injected Azure values. `automountServiceAccountToken: false` avoids the default Kubernetes API token; the Workload ID webhook injects its separately scoped federation token.
@@ -45,12 +46,13 @@ The SDK reads the injected client/tenant IDs and projected token file. Entra val
 <details>
 <summary>Solution</summary>
 
-```powershell
-$order = @{ id = "identity-$([guid]::NewGuid().ToString('N'))"; item = 'synthetic-widget' }
-Invoke-RestMethod http://localhost:8080/orders -Method Post `
-  -ContentType application/json -Body ($order | ConvertTo-Json)
+```bash
+OrderId="identity-$(openssl rand -hex 16)"
+order=$(jq -n --arg id "$OrderId" '{id:$id,item:"synthetic-widget"}')
+curl --fail --show-error --write-out '\nHTTP %{http_code}\n' http://localhost:8080/orders \
+  -H 'Content-Type: application/json' --data-raw "$order"
 kubectl logs -n orders deployment/order-worker --since=5m
-az servicebus queue show -g $Lab.ResourceGroup --namespace-name $Lab.ServiceBusName `
+az servicebus queue show -g "$(lab_value ResourceGroup)" --namespace-name "$(lab_value ServiceBusName)" \
   --name orders --query countDetails -o json
 ```
 
@@ -67,22 +69,22 @@ Expected: HTTP 202 and a worker `order_processed` log with the same ID. Counts c
 
 Grant your human identity temporary **Key Vault Secrets Officer** at this vault to create a synthetic value; do not give that role to the app:
 
-```powershell
-$me = az ad signed-in-user show --query id -o tsv
-az role assignment create --assignee-object-id $me --assignee-principal-type User `
-  --role 'Key Vault Secrets Officer' --scope $Outputs.keyVaultId.value
-az keyvault secret set --vault-name $Lab.KeyVaultName --name lab-version --value version-one -o none
-$workerPod = kubectl get pods -n orders -l app=order-worker -o jsonpath='{.items[0].metadata.name}'
-$check = "from azure.identity import DefaultAzureCredential; from azure.keyvault.secrets import SecretClient; SecretClient('https://$($Lab.KeyVaultName).vault.azure.net', DefaultAzureCredential()).get_secret('lab-version')"
+```bash
+me=$(az ad signed-in-user show --query id -o tsv)
+az role assignment create --assignee-object-id "$me" --assignee-principal-type User \
+  --role 'Key Vault Secrets Officer' --scope "$(output_value keyVaultId)"
+az keyvault secret set --vault-name "$(lab_value KeyVaultName)" --name lab-version --value version-one -o none
+workerPod=$(kubectl get pods -n orders -l app=order-worker -o jsonpath='{.items[0].metadata.name}')
+check="from azure.identity import DefaultAzureCredential; from azure.keyvault.secrets import SecretClient; SecretClient('https://$(lab_value KeyVaultName).vault.azure.net', DefaultAzureCredential()).get_secret('lab-version')"
 ```
 
 Run the following expected-failure command separately, then inspect the output:
 
-```powershell
-kubectl exec -n orders $workerPod -- python -c $check
+```bash
+kubectl exec -n orders "$workerPod" -- python -c "$check"
 ```
 
-Expected: **403 Forbidden**, not successful secret access. `Use-Lab.ps1` makes failed native commands terminate that command invocation; run the next section separately. A token acquisition error indicates federation/authentication trouble, while a network timeout is not proof of an RBAC denial.
+Expected: **403 Forbidden**, not successful secret access. Bash strict mode stops the current invocation on a failed command; run this expected failure in a separate Bash invocation, then resume in the original context. A token acquisition error indicates federation/authentication trouble, while a network timeout is not proof of an RBAC denial.
 
 </details>
 
@@ -93,50 +95,68 @@ Expected: **403 Forbidden**, not successful secret access. `Use-Lab.ps1` makes f
 <details>
 <summary>Solution</summary>
 
-```powershell
-$provider = Get-Content .\k8s\identity\secret-provider.yaml -Raw
-$provider = $provider.Replace('__API_CLIENT_ID__', $Outputs.apiClientId.value).
-  Replace('__KEY_VAULT__', $Lab.KeyVaultName).Replace('__TENANT_ID__', $Lab.TenantId)
-Set-Content .\rendered\base\secret-provider.yaml $provider -Encoding utf8
-Copy-Item .\k8s\identity\mount-patch.yaml .\rendered\base\identity-patch.yaml
-$k = Get-Content .\rendered\base\kustomization.yaml -Raw
-if ($k -notmatch 'secret-provider.yaml') {
-  $k = $k.Replace('  - worker.yaml', "  - worker.yaml`n  - secret-provider.yaml")
-  $k += "`npatches:`n  - path: identity-patch.yaml`n"
-  Set-Content .\rendered\base\kustomization.yaml $k -Encoding utf8
-}
-kubectl apply -k .\rendered\base
+```bash
+provider=$(< ./k8s/identity/secret-provider.yaml)
+provider=${provider//__API_CLIENT_ID__/$(output_value apiClientId)}
+provider=${provider//__KEY_VAULT__/$(lab_value KeyVaultName)}
+provider=${provider//__TENANT_ID__/$(lab_value TenantId)}
+if grep -Eq '__[A-Z0-9_]+__' <<< "$provider"; then
+  printf '%s\n' 'Unresolved SecretProviderClass token.' >&2
+  exit 1
+fi
+printf '%s\n' "$provider" > ./rendered/base/secret-provider.yaml
+cp ./k8s/identity/mount-patch.yaml ./rendered/base/identity-patch.yaml
+k=$(< ./rendered/base/kustomization.yaml)
+if ! grep -Fq 'secret-provider.yaml' <<< "$k"; then
+  if ! grep -Fxq '  - worker.yaml' <<< "$k"; then
+    printf '%s\n' 'Expected worker resource entry in the accumulated Kustomization.' >&2
+    exit 1
+  fi
+  k=${k/'  - worker.yaml'/$'  - worker.yaml\n  - secret-provider.yaml'}
+  printf '%s\n' "$k" > ./rendered/base/kustomization.yaml
+  cat >> ./rendered/base/kustomization.yaml <<'YAML'
+
+patches:
+  - path: identity-patch.yaml
+YAML
+fi
+kubectl kustomize ./rendered/base > /dev/null
+kubectl apply -k ./rendered/base
 kubectl rollout status deployment/order-api -n orders --timeout=300s
 kubectl get secretproviderclasspodstatus -n orders
 ```
 
 Restart the port-forward if its pod was replaced. `GET /config-version` should show `version-one`. Record the API pod UIDs and restart counts before rotating the value:
 
-```powershell
-Invoke-RestMethod http://localhost:8080/config-version
-kubectl get pods -n orders -l app=order-api `
+```bash
+curl --fail --show-error http://localhost:8080/config-version
+kubectl get pods -n orders -l app=order-api \
   -o custom-columns='NAME:.metadata.name,UID:.metadata.uid,RESTARTS:.status.containerStatuses[*].restartCount'
-az keyvault secret set --vault-name $Lab.KeyVaultName --name lab-version --value version-two -o none
+az keyvault secret set --vault-name "$(lab_value KeyVaultName)" --name lab-version --value version-two -o none
 ```
 
 Poll within a bounded interval:
 
-```powershell
-$deadline = (Get-Date).AddMinutes(6)
-do {
-  $config = Invoke-RestMethod http://localhost:8080/config-version
-  if ($config.lab_version -eq 'version-two') { break }
-  Start-Sleep -Seconds 10
-} while ((Get-Date) -lt $deadline)
-if ($config.lab_version -ne 'version-two') { throw 'CSI rotation did not reach the application; inspect mount status and provider logs.' }
+```bash
+deadline=$((SECONDS + 360))
+while :; do
+  config=$(curl --fail --silent --show-error --max-time 10 http://localhost:8080/config-version)
+  version=$(jq -er '.lab_version' <<< "$config")
+  if [[ "$version" == version-two ]]; then break; fi
+  if (( SECONDS >= deadline )); then
+    printf '%s\n' 'CSI rotation did not reach the application; inspect mount status and provider logs.' >&2
+    exit 1
+  fi
+  sleep 10
+done
 ```
 
 The app rereads the mounted file on every call; environment variables would not update automatically. This example intentionally does not sync to a Kubernetes Secret. CSI does not itself force every application to reload configuration.
 
 After observing `version-two`, compare the API pod UIDs and restart counts with the saved before-state:
 
-```powershell
-kubectl get pods -n orders -l app=order-api `
+```bash
+kubectl get pods -n orders -l app=order-api \
   -o custom-columns='NAME:.metadata.name,UID:.metadata.uid,RESTARTS:.status.containerStatuses[*].restartCount'
 ```
 
@@ -153,9 +173,9 @@ Unchanged UID/restart counts alongside the two observed values distinguish live 
 
 Temporarily point the API federation to a nonexistent service account:
 
-```powershell
-az identity federated-credential update -g $Lab.ResourceGroup `
-  --identity-name "$($Lab.Prefix)-api" --name orders-api `
+```bash
+az identity federated-credential update -g "$(lab_value ResourceGroup)" \
+  --identity-name "$(lab_value Prefix)-api" --name orders-api \
   --subject system:serviceaccount:orders:missing-api
 kubectl rollout restart deployment/order-api -n orders
 kubectl get pods -n orders
@@ -166,9 +186,9 @@ Expected: a new pod cannot acquire the federated identity for its CSI mount; exi
 
 **Recovery:**
 
-```powershell
-az identity federated-credential update -g $Lab.ResourceGroup `
-  --identity-name "$($Lab.Prefix)-api" --name orders-api `
+```bash
+az identity federated-credential update -g "$(lab_value ResourceGroup)" \
+  --identity-name "$(lab_value Prefix)-api" --name orders-api \
   --subject system:serviceaccount:orders:order-api
 kubectl rollout restart deployment/order-api -n orders
 kubectl rollout status deployment/order-api -n orders --timeout=300s
@@ -219,7 +239,7 @@ Only inside one current worker process. Restart-safe idempotency is introduced w
 
 ## Cleanup and references
 
-Restore the federation subject, leave CSI resources mounted, and retain `version-two` for later labs. Keep the extended `rendered\base` directory: lab 4 adopts it into Flux. **Do not rerun the base renderer after extending it**, because its initial kustomization would replace these additions. Remove the human Secrets Officer role at final cleanup or when a governed operator takes over.
+Restore the federation subject, leave CSI resources mounted, and retain `version-two` for later labs. Keep the extended `rendered/base` directory: lab 4 adopts it into Flux. **Do not rerun the base renderer after extending it**, because its initial kustomization would replace these additions. Remove the human Secrets Officer role at final cleanup or when a governed operator takes over.
 
 <details>
 <summary>Solution: cumulative cleanup</summary>
@@ -228,9 +248,9 @@ Use task 5's recovery and confirm the API subject is `system:serviceaccount:orde
 
 When the temporary human role is no longer needed, list the assignments at the vault and identify the exact assignment created for this exercise:
 
-```powershell
-$me = az ad signed-in-user show --query id -o tsv
-az role assignment list --assignee $me --scope $Outputs.keyVaultId.value `
+```bash
+me=$(az ad signed-in-user show --query id -o tsv)
+az role assignment list --assignee "$me" --scope "$(output_value keyVaultId)" \
   --role 'Key Vault Secrets Officer' --query '[].{id:id,principal:principalId,scope:scope}' -o table
 ```
 

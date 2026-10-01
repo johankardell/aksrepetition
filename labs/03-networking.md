@@ -13,25 +13,26 @@
 <details>
 <summary>Solution</summary>
 
-```powershell
-. .\scripts\Use-Lab.ps1
-az deployment group create -g $Lab.ResourceGroup -n private-dependencies `
-  -f .\infra\private-endpoints.bicep -p prefix=$Lab.Prefix location=$Lab.Location `
-  vnetId=$Outputs.vnetId.value subnetId=$Outputs.endpointsSubnetId.value `
-  acrId=$Outputs.acrId.value keyVaultId=$Outputs.keyVaultId.value serviceBusId=$Outputs.serviceBusId.value -o none
-Resolve-DnsName "$($Lab.AcrName).azurecr.io"
-Resolve-DnsName "$($Lab.KeyVaultName).vault.azure.net"
-Resolve-DnsName "$($Lab.ServiceBusName).servicebus.windows.net"
+```bash
+set -euo pipefail
+source ./scripts/use-lab.sh
+az deployment group create -g "$(lab_value ResourceGroup)" -n private-dependencies \
+  -f ./infra/private-endpoints.bicep -p "prefix=$(lab_value Prefix)" "location=$(lab_value Location)" \
+  "vnetId=$(output_value vnetId)" "subnetId=$(output_value endpointsSubnetId)" \
+  "acrId=$(output_value acrId)" "keyVaultId=$(output_value keyVaultId)" "serviceBusId=$(output_value serviceBusId)" -o none
+dig "$(lab_value AcrName).azurecr.io"
+dig "$(lab_value KeyVaultName).vault.azure.net"
+dig "$(lab_value ServiceBusName).servicebus.windows.net"
 ```
 
 Expected: CNAMEs to private-link zones and private endpoint IPs in the endpoint subnet. If using a management VNet, link these zones there or forward DNS to a resolver that can see them. ACR also has regional **data** endpoints; its private DNS zone group handles records beyond the registry login endpoint.
 
 Only after private DNS/reachability works:
 
-```powershell
-az acr update -n $Lab.AcrName --public-network-enabled false -o none
-az keyvault update -n $Lab.KeyVaultName --public-network-access Disabled -o none
-az servicebus namespace update -g $Lab.ResourceGroup -n $Lab.ServiceBusName --public-network-access Disabled -o none
+```bash
+az acr update -n "$(lab_value AcrName)" --public-network-enabled false -o none
+az keyvault update -n "$(lab_value KeyVaultName)" --public-network-access Disabled -o none
+az servicebus namespace update -g "$(lab_value ResourceGroup)" -n "$(lab_value ServiceBusName)" --public-network-access Disabled -o none
 kubectl rollout restart deployment/order-api deployment/order-worker -n orders
 kubectl rollout status deployment/order-api -n orders --timeout=300s
 kubectl rollout status deployment/order-worker -n orders --timeout=300s
@@ -48,20 +49,20 @@ Confirm new pods pull images, mount CSI, and process a fresh order. Public Azure
 <details>
 <summary>Solution</summary>
 
-Review `infra\firewall.bicep`: AKS FQDN tag, HTTPS identity/GitOps/monitoring allowances, and required control-plane network rules. The private API is not protected with public API authorized ranges; those are a different public endpoint design.
+Review `infra/firewall.bicep`: AKS FQDN tag, HTTPS identity/GitOps/monitoring allowances, and required control-plane network rules. The private API is not protected with public API authorized ranges; those are a different public endpoint design.
 
-```powershell
-az deployment group what-if -g $Lab.ResourceGroup -n egress `
-  -f .\infra\firewall.bicep -p prefix=$Lab.Prefix location=$Lab.Location spokeName="$($Lab.Prefix)-vnet"
-az deployment group create -g $Lab.ResourceGroup -n egress `
-  -f .\infra\firewall.bicep -p prefix=$Lab.Prefix location=$Lab.Location spokeName="$($Lab.Prefix)-vnet" -o none
-$egress = az deployment group show -g $Lab.ResourceGroup -n egress --query properties.outputs -o json | ConvertFrom-Json
-az role assignment create --assignee-object-id $Outputs.clusterPrincipalId.value `
-  --assignee-principal-type ServicePrincipal --role 'Network Contributor' --scope $egress.routeTableId.value -o none
-az network vnet subnet update -g $Lab.ResourceGroup --vnet-name "$($Lab.Prefix)-vnet" `
-  -n nodes --route-table $egress.routeTableId.value -o none
-az aks update -g $Lab.ResourceGroup -n $Lab.ClusterName --outbound-type userDefinedRouting -o none
-az aks show -g $Lab.ResourceGroup -n $Lab.ClusterName --query networkProfile.outboundType -o tsv
+```bash
+az deployment group what-if -g "$(lab_value ResourceGroup)" -n egress \
+  -f ./infra/firewall.bicep -p "prefix=$(lab_value Prefix)" "location=$(lab_value Location)" "spokeName=$(lab_value Prefix)-vnet"
+az deployment group create -g "$(lab_value ResourceGroup)" -n egress \
+  -f ./infra/firewall.bicep -p "prefix=$(lab_value Prefix)" "location=$(lab_value Location)" "spokeName=$(lab_value Prefix)-vnet" -o none
+egress=$(az deployment group show -g "$(lab_value ResourceGroup)" -n egress --query properties.outputs -o json)
+az role assignment create --assignee-object-id "$(output_value clusterPrincipalId)" \
+  --assignee-principal-type ServicePrincipal --role 'Network Contributor' --scope "$(jq -r '.routeTableId.value' <<< "$egress")" -o none
+az network vnet subnet update -g "$(lab_value ResourceGroup)" --vnet-name "$(lab_value Prefix)-vnet" \
+  -n nodes --route-table "$(jq -r '.routeTableId.value' <<< "$egress")" -o none
+az aks update -g "$(lab_value ResourceGroup)" -n "$(lab_value ClusterName)" --outbound-type userDefinedRouting -o none
+az aks show -g "$(lab_value ResourceGroup)" -n "$(lab_value ClusterName)" --query networkProfile.outboundType -o tsv
 kubectl get nodes
 ```
 
@@ -69,12 +70,12 @@ Expect `userDefinedRouting` and healthy nodes. Peering must allow forwarded traf
 
 Enable firewall logs to the existing workspace:
 
-```powershell
-$firewallId = az network firewall show -g $Lab.ResourceGroup -n "$($Lab.Prefix)-fw" --query id -o tsv
-az monitor diagnostic-settings categories list --resource $firewallId -o table
-$logs = '[{"category":"AzureFirewallApplicationRule","enabled":true},{"category":"AzureFirewallNetworkRule","enabled":true}]'
-az monitor diagnostic-settings create --name lab-firewall --resource $firewallId `
-  --workspace $Outputs.workspaceId.value --logs $logs -o none
+```bash
+firewallId=$(az network firewall show -g "$(lab_value ResourceGroup)" -n "$(lab_value Prefix)-fw" --query id -o tsv)
+az monitor diagnostic-settings categories list --resource "$firewallId" -o table
+logs='[{"category":"AzureFirewallApplicationRule","enabled":true},{"category":"AzureFirewallNetworkRule","enabled":true}]'
+az monitor diagnostic-settings create --name lab-firewall --resource "$firewallId" \
+  --workspace "$(output_value workspaceId)" --logs "$logs" -o none
 ```
 
 Inspect documented AKS and add-on outbound endpoints whenever enabling new features. Do not add `*` allow rules to hide an incomplete allowlist. The management/build host needs its own explicit outbound path; this route table is attached only to AKS nodes.
@@ -88,9 +89,9 @@ Inspect documented AKS and add-on outbound endpoints whenever enabling new featu
 <details>
 <summary>Solution</summary>
 
-```powershell
-az aks update -g $Lab.ResourceGroup -n $Lab.ClusterName --enable-gateway-api -o none
-az aks update -g $Lab.ResourceGroup -n $Lab.ClusterName --enable-app-routing-istio -o none
+```bash
+az aks update -g "$(lab_value ResourceGroup)" -n "$(lab_value ClusterName)" --enable-gateway-api -o none
+az aks update -g "$(lab_value ResourceGroup)" -n "$(lab_value ClusterName)" --enable-app-routing-istio -o none
 kubectl get crd gateways.gateway.networking.k8s.io
 kubectl get gatewayclass approuting-istio
 kubectl get pods -n aks-istio-system
@@ -102,58 +103,78 @@ Expected: managed standard-channel Gateway API CRDs and the `approuting-istio` G
 
 ### 4. Terminate TLS at an internal gateway
 
-**Task:** publish the API at an internal HTTPS gateway, verify route attachment and certificate validation, then configure ordinary private DNS and client trust for later PowerShell exercises. Keep ingress internal, never commit TLS private keys, and never bypass certificate validation. Import only your own lab-generated certificate into the current user's trust store; record its thumbprint for cleanup.
+**Task:** publish the API at an internal HTTPS gateway, verify route attachment and certificate validation, then configure ordinary private DNS and explicit Linux client trust for later exercises. Keep ingress internal, never commit TLS private keys, and never bypass certificate validation. Trust only your own lab-generated certificate in a dedicated local CA bundle; record its SHA-256 fingerprint for cleanup.
 
 <details>
 <summary>Solution</summary>
 
 Set `Hostname` in local settings to a lab DNS name. An owned public domain is not needed for this internal self-signed exercise; lab 10 needs one for trusted public TLS.
 
-```powershell
-. .\scripts\Use-Lab.ps1
-.\scripts\New-LabCertificate.ps1 -Hostname $Lab.Hostname
+```bash
+source ./scripts/use-lab.sh
+bash ./scripts/new-lab-certificate.sh --hostname "$(lab_value Hostname)"
 kubectl create namespace gateway-system --dry-run=client -o yaml | kubectl apply -f -
-kubectl create secret tls orders-tls -n gateway-system `
-  --cert .\rendered\certs\tls.crt --key .\rendered\certs\tls.key `
+kubectl create secret tls orders-tls -n gateway-system \
+  --cert ./rendered/certs/tls.crt --key ./rendered/certs/tls.key \
   --dry-run=client -o yaml | kubectl apply -f -
-(Get-Content .\k8s\network\gateway.yaml -Raw).Replace('__HOSTNAME__', $Lab.Hostname) |
-  Set-Content .\rendered\gateway.yaml -Encoding utf8
-kubectl apply -f .\rendered\gateway.yaml
+gateway=$(< ./k8s/network/gateway.yaml)
+gateway=${gateway//__HOSTNAME__/$(lab_value Hostname)}
+if grep -Eq '__[A-Z0-9_]+__' <<< "$gateway"; then
+  printf '%s\n' 'Unresolved gateway token.' >&2
+  exit 1
+fi
+printf '%s\n' "$gateway" > ./rendered/gateway.yaml
+kubectl apply -f ./rendered/gateway.yaml
 kubectl wait -n gateway-system gateway/orders-gateway --for=condition=Programmed --timeout=300s
 kubectl get gateway -n gateway-system orders-gateway -o yaml
 kubectl get httproute -n orders orders -o yaml
-$ip = kubectl get gateway orders-gateway -n gateway-system -o jsonpath='{.status.addresses[0].value}'
-curl.exe --fail --cacert .\rendered\certs\tls.crt `
-  --resolve "$($Lab.Hostname):443:$ip" "https://$($Lab.Hostname)/readyz"
+ip=$(kubectl get gateway orders-gateway -n gateway-system -o jsonpath='{.status.addresses[0].value}')
+curl --fail --show-error --cacert ./rendered/certs/tls.crt \
+  --resolve "$(lab_value Hostname):443:$ip" "https://$(lab_value Hostname)/readyz"
 ```
 
 Expect private IP, accepted/resolved route references, and HTTP 200 with successful certificate verification. Do not replace trust verification with `-k`. Configure private DNS for normal clients if needed; `--resolve` intentionally keeps this lab independent of a DNS zone you own.
 
 Platform team owns the Gateway and TLS lifecycle; app team owns its HTTPRoute. A namespace selector limits who can attach routes. For production, use a trusted certificate and the supported Key Vault/DNS integration or explicit certificate synchronization; do not keep PEM private keys in source control.
 
-**Prepare the ordinary HTTPS client path used by labs 5-10.** `curl --resolve --cacert` does not configure DNS or trust for PowerShell, so complete both before calling the later load scripts. Create a private zone at the exact application hostname to avoid shadowing unrelated parent-domain records:
+**Prepare the ordinary HTTPS client path used by labs 5-10.** `curl --resolve --cacert` does not configure DNS or persistent client trust, so complete both before calling the later load scripts. Create a private zone at the exact application hostname to avoid shadowing unrelated parent-domain records:
 
-```powershell
-az network private-dns zone create -g $Lab.ResourceGroup -n $Lab.Hostname -o none
-az network private-dns link vnet create -g $Lab.ResourceGroup --zone-name $Lab.Hostname `
-  -n orders-ingress --virtual-network $Outputs.vnetId.value --registration-enabled false -o none
-az network private-dns record-set a add-record -g $Lab.ResourceGroup `
-  --zone-name $Lab.Hostname --record-set-name '@' --ipv4-address $ip -o none
-Resolve-DnsName $Lab.Hostname
+```bash
+az network private-dns zone create -g "$(lab_value ResourceGroup)" -n "$(lab_value Hostname)" -o none
+az network private-dns link vnet create -g "$(lab_value ResourceGroup)" --zone-name "$(lab_value Hostname)" \
+  -n orders-ingress --virtual-network "$(output_value vnetId)" --registration-enabled false -o none
+az network private-dns record-set a add-record -g "$(lab_value ResourceGroup)" \
+  --zone-name "$(lab_value Hostname)" --record-set-name '@' --ipv4-address "$ip" -o none
+dig "$(lab_value Hostname)"
+getent ahostsv4 "$(lab_value Hostname)"
 ```
 
 If your management client uses a separate VNet or corporate DNS, add its private-zone link/conditional forwarding just as for the private AKS API. Resolution must return the gateway IP; `--resolve` must no longer be necessary.
 
-On the **Windows management workstation**, explicitly trust this lab-generated certificate in the current user's certificate store (not machine-wide), then prove PowerShell HTTPS works:
+On the **Linux management host**, inspect the generated certificate's subject, SAN, validity and fingerprint. Build a user-owned bundle that retains the system roots and adds only this lab certificate; do not install it machine-wide. The standard system bundle paths below cover Debian/Ubuntu and RHEL-family hosts; on another distribution, select its approved PEM CA bundle explicitly.
 
-```powershell
-if (-not $IsWindows) { throw 'Use your approved OS trust-store procedure on a non-Windows management host, then verify HTTPS without bypassing validation.' }
-$trusted = Import-Certificate -FilePath .\rendered\certs\tls.crt -CertStoreLocation Cert:\CurrentUser\Root
-$trusted.Thumbprint | Set-Content .\rendered\certs\trusted-thumbprint.txt
-Invoke-RestMethod "https://$($Lab.Hostname)/readyz"
+```bash
+openssl x509 -in ./rendered/certs/tls.crt -noout -subject -dates -ext subjectAltName -fingerprint -sha256
+openssl x509 -in ./rendered/certs/tls.crt -noout -checkhost "$(lab_value Hostname)"
+if [[ -f /etc/ssl/certs/ca-certificates.crt ]]; then
+  SystemCaBundle=/etc/ssl/certs/ca-certificates.crt
+elif [[ -f /etc/pki/tls/certs/ca-bundle.crt ]]; then
+  SystemCaBundle=/etc/pki/tls/certs/ca-bundle.crt
+else
+  printf '%s\n' 'Select the approved system PEM CA bundle for this Linux distribution before proceeding.' >&2
+  exit 1
+fi
+umask 077
+cat "$SystemCaBundle" ./rendered/certs/tls.crt > ./rendered/certs/lab-ca-bundle.pem
+openssl x509 -in ./rendered/certs/tls.crt -noout -fingerprint -sha256 \
+  > ./rendered/certs/trusted-fingerprint.txt
+export CURL_CA_BUNDLE="$Root/rendered/certs/lab-ca-bundle.pem"
+export SSL_CERT_FILE="$CURL_CA_BUNDLE"
+export REQUESTS_CA_BUNDLE="$CURL_CA_BUNDLE"
+curl --fail --show-error "https://$(lab_value Hostname)/readyz"
 ```
 
-Trust only the certificate you just generated in this disposable lab; never import an arbitrary supplied root. The self-signed certificate expires after 14 days. Renew the certificate, update the Kubernetes TLS Secret and replace the old current-user trust entry if resuming after expiry. A trusted enterprise certificate issued for the hostname avoids this local lab trust setup. Do not add certificate-validation bypasses to the load generator.
+Trust only the certificate you just generated in this disposable lab; never add an arbitrary supplied root. In each new terminal, source `use-lab.sh` and re-export the three absolute CA bundle paths above before using ordinary HTTPS clients or load scripts. The bundle is explicit client trust, not a system-wide installation; clients that ignore these variables need an approved client-specific CA setting. The self-signed certificate expires after 14 days. Renew it, update the Kubernetes TLS Secret and rebuild the bundle/fingerprint record if resuming after expiry. A trusted enterprise certificate issued for the hostname avoids this local lab trust setup. Do not add certificate-validation bypasses to the load generator.
 
 </details>
 
@@ -164,36 +185,42 @@ Trust only the certificate you just generated in this disposable lab; never impo
 <details>
 <summary>Solution</summary>
 
-```powershell
-Copy-Item .\k8s\network\policies.yaml .\rendered\base\policies.yaml
-$k = Get-Content .\rendered\base\kustomization.yaml -Raw
-if ($k -notmatch 'policies.yaml') {
-  $k = $k.Replace('  - worker.yaml', "  - worker.yaml`n  - policies.yaml")
-  Set-Content .\rendered\base\kustomization.yaml $k -Encoding utf8
-}
-kubectl apply -k .\rendered\base
+```bash
+cp ./k8s/network/policies.yaml ./rendered/base/policies.yaml
+k=$(< ./rendered/base/kustomization.yaml)
+if ! grep -Fq 'policies.yaml' <<< "$k"; then
+  if ! grep -Fxq '  - worker.yaml' <<< "$k"; then
+    printf '%s\n' 'Expected worker resource entry in the accumulated Kustomization.' >&2
+    exit 1
+  fi
+  k=${k/'  - worker.yaml'/$'  - worker.yaml\n  - policies.yaml'}
+  printf '%s\n' "$k" > ./rendered/base/kustomization.yaml
+fi
+kubectl kustomize ./rendered/base > /dev/null
+kubectl apply -k ./rendered/base
 kubectl get networkpolicy -n orders
-curl.exe --fail --cacert .\rendered\certs\tls.crt `
-  --resolve "$($Lab.Hostname):443:$ip" "https://$($Lab.Hostname)/readyz"
+curl --fail --show-error --cacert ./rendered/certs/tls.crt \
+  --resolve "$(lab_value Hostname):443:$ip" "https://$(lab_value Hostname)/readyz"
 ```
 
 Default-deny covers ingress and egress. DNS to kube-system and TCP 443 are allowed; **the firewall** enforces public HTTPS destinations. Private endpoint routes bypass the internet firewall as designed. A TCP 443 allow rule alone is not destination-level isolation.
 
 Prove the full approved request path still processes an order:
 
-```powershell
-$payload = @{ id = "private-$([guid]::NewGuid().ToString('N'))"; item = 'synthetic-private-widget' } | ConvertTo-Json -Compress
-curl.exe --fail --cacert .\rendered\certs\tls.crt `
-  --resolve "$($Lab.Hostname):443:$ip" -H 'Content-Type: application/json' `
-  --data-raw $payload "https://$($Lab.Hostname)/orders"
+```bash
+OrderId="private-$(openssl rand -hex 16)"
+payload=$(jq -nc --arg id "$OrderId" '{id:$id,item:"synthetic-private-widget"}')
+curl --fail --show-error --cacert ./rendered/certs/tls.crt \
+  --resolve "$(lab_value Hostname):443:$ip" -H 'Content-Type: application/json' \
+  --data-raw "$payload" "https://$(lab_value Hostname)/orders"
 kubectl logs -n orders deployment/order-worker --since=5m
 ```
 
 Test that the worker cannot call the API directly:
 
-```powershell
-$worker = kubectl get pod -n orders -l app=order-worker -o jsonpath='{.items[0].metadata.name}'
-kubectl exec -n orders $worker -- python -c `
+```bash
+worker=$(kubectl get pod -n orders -l app=order-worker -o jsonpath='{.items[0].metadata.name}')
+kubectl exec -n orders "$worker" -- python -c \
   "import urllib.request; urllib.request.urlopen('http://order-api/readyz', timeout=5)"
 ```
 
@@ -201,9 +228,9 @@ Expected failure: timeout/denial, not HTTP success. Run expected-failure command
 
 Test unapproved outbound HTTPS from an API pod:
 
-```powershell
-$pod = kubectl get pod -n orders -l app=order-api -o jsonpath='{.items[0].metadata.name}'
-kubectl exec -n orders $pod -- python -c `
+```bash
+pod=$(kubectl get pod -n orders -l app=order-api -o jsonpath='{.items[0].metadata.name}')
+kubectl exec -n orders "$pod" -- python -c \
   "import urllib.request; urllib.request.urlopen('https://example.org', timeout=10)"
 ```
 
@@ -222,39 +249,36 @@ In the workspace's firewall diagnostic records, filter to the test's UTC time, d
 
 Read the healthy record, then use a short-lived pod-local host override to simulate incorrect DNS on a disposable copy rather than corrupting a shared private zone:
 
-```powershell
-$patch = @{
-  spec = @{ template = @{ spec = @{ hostAliases = @(
-    @{ ip = '192.0.2.1'; hostnames = @("$($Lab.ServiceBusName).servicebus.windows.net") }
-  ) } } }
-} | ConvertTo-Json -Depth 8 -Compress
-kubectl patch deployment order-worker -n orders --type merge -p $patch
+```bash
+patch=$(jq -nc --arg hostname "$(lab_value ServiceBusName).servicebus.windows.net" \
+  '{spec:{template:{spec:{hostAliases:[{ip:"192.0.2.1",hostnames:[$hostname]}]}}}}')
+kubectl patch deployment order-worker -n orders --type merge -p "$patch"
 kubectl logs -n orders deployment/order-worker --since=5m
 kubectl describe deployment order-worker -n orders
 ```
 
-Inspect `/etc/hosts` inside the current worker pod and compare with `Resolve-DnsName` on the management host. The pod override should produce a Service Bus timeout while the administrator still resolves the real private endpoint. This illustrates that resolution context matters; it is not an authoritative DNS-zone outage.
+Inspect `/etc/hosts` inside the current worker pod and compare with `dig` on the management host. The pod override should produce a Service Bus timeout while the administrator still resolves the real private endpoint. This illustrates that resolution context matters; it is not an authoritative DNS-zone outage.
 
-```powershell
+```bash
 kubectl rollout status deployment/order-worker -n orders --timeout=300s
-$worker = kubectl get pod -n orders -l app=order-worker -o jsonpath='{.items[0].metadata.name}'
-kubectl exec -n orders $worker -- python -c "from pathlib import Path; print(Path('/etc/hosts').read_text())"
-Resolve-DnsName "$($Lab.ServiceBusName).servicebus.windows.net"
-kubectl logs -n orders $worker --since=5m
+worker=$(kubectl get pod -n orders -l app=order-worker -o jsonpath='{.items[0].metadata.name}')
+kubectl exec -n orders "$worker" -- python -c "from pathlib import Path; print(Path('/etc/hosts').read_text())"
+dig "$(lab_value ServiceBusName).servicebus.windows.net"
+kubectl logs -n orders "$worker" --since=5m
 ```
 
 **Recovery:**
 
-```powershell
-kubectl patch deployment order-worker -n orders --type merge `
+```bash
+kubectl patch deployment order-worker -n orders --type merge \
   -p '{"spec":{"template":{"spec":{"hostAliases":null}}}}'
 kubectl rollout status deployment/order-worker -n orders --timeout=300s
 ```
 
 Submit a new order, confirm worker processing, and check for accumulated retries/dead-letter messages.
 
-```powershell
-az servicebus queue show -g $Lab.ResourceGroup --namespace-name $Lab.ServiceBusName `
+```bash
+az servicebus queue show -g "$(lab_value ResourceGroup)" --namespace-name "$(lab_value ServiceBusName)" \
   --name orders --query countDetails -o json
 ```
 
@@ -303,24 +327,30 @@ No. Gateway routing/TLS, WAF, identity-aware API controls and east-west mesh pol
 
 ## Cleanup and references
 
-Remove the host override, keep private endpoints/firewall/policies/gateway and private ingress DNS for later labs, and protect/delete local certificate files at final teardown. At final teardown, remove the specific imported lab certificate from `Cert:\CurrentUser\Root` using the thumbprint saved in `rendered\certs\trusted-thumbprint.txt`; do not remove unrelated trusted certificates. Do not redeploy the lab 1 bootstrap template over these network changes. Keep `rendered\base` intact for Flux adoption and `rendered\gateway.yaml` as the separately owned platform ingress configuration.
+Remove the host override, keep private endpoints/firewall/policies/gateway and private ingress DNS for later labs, and protect/delete local certificate files at final teardown. At final teardown, remove only the lab-specific CA bundle after comparing the saved fingerprint with the generated certificate; do not modify system roots. Do not redeploy the lab 1 bootstrap template over these network changes. Keep `rendered/base` intact for Flux adoption and `rendered/gateway.yaml` as the separately owned platform ingress configuration.
 
 <details>
 <summary>Solution: cumulative and final certificate cleanup</summary>
 
-For the handoff to lab 4, complete task 6's recovery and demonstrate a fresh processed order over ordinary HTTPS. Leave the private DNS zone and current-user trust entry in place because later load scripts need them.
+For the handoff to lab 4, complete task 6's recovery and demonstrate a fresh processed order over ordinary HTTPS. Leave the private DNS zone and local CA bundle in place because later load scripts need them.
 
-Only at **final teardown**, on the Windows workstation where you imported the lab certificate, inspect and remove the exact saved thumbprint:
+Only at **final teardown**, on the Linux host where you created the bundle, inspect the certificate and compare its exact saved fingerprint before removing the local trust files:
 
-```powershell
-$thumbprint = (Get-Content .\rendered\certs\trusted-thumbprint.txt -Raw).Trim()
-if ($thumbprint -notmatch '^[A-Fa-f0-9]{40}$') { throw 'Invalid saved certificate thumbprint; inspect the lab certificate before removing anything.' }
-$certificatePath = "Cert:\CurrentUser\Root\$thumbprint"
-Get-Item -LiteralPath $certificatePath | Format-List Subject,Thumbprint,NotAfter
-Remove-Item -LiteralPath $certificatePath -Confirm
+```bash
+Fingerprint=$(< ./rendered/certs/trusted-fingerprint.txt)
+ActualFingerprint=$(openssl x509 -in ./rendered/certs/tls.crt -noout -fingerprint -sha256)
+if [[ ! "$Fingerprint" =~ ^[sS][hH][aA]256\ Fingerprint=([A-Fa-f0-9]{2}:){31}[A-Fa-f0-9]{2}$ ]] \
+  || [[ "$Fingerprint" != "$ActualFingerprint" ]]; then
+  printf '%s\n' 'Saved certificate fingerprint is invalid or changed; inspect renewal records before removing anything.' >&2
+  exit 1
+fi
+openssl x509 -in ./rendered/certs/tls.crt -noout -subject -dates -fingerprint -sha256
+# Run only after confirming this is the lab certificate and dependent gateways are retired.
+unset CURL_CA_BUNDLE SSL_CERT_FILE REQUESTS_CA_BUNDLE
+rm -- ./rendered/certs/lab-ca-bundle.pem ./rendered/certs/trusted-fingerprint.txt
 ```
 
-Confirm the displayed certificate is the one generated for this lab before approving removal. If the certificate was renewed, account for each lab-specific trust entry from the renewal record; do not remove unrelated roots or wildcard the certificate store. Protect local keys until the dependent gateways are retired, then remove the specific lab certificate/key files as part of final pack teardown.
+Confirm the displayed certificate is the one generated for this lab before running the removal commands. If it was renewed, inspect the renewal record; do not remove unrelated bundles or system roots. Remove any shell startup exports for this lab bundle if you added them. Protect local keys until the dependent gateways are retired, then remove only `rendered/certs/tls.crt` and `rendered/certs/tls.key` as part of final pack teardown.
 
 </details>
 

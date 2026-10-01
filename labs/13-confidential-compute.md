@@ -8,7 +8,7 @@ This lab creates a dedicated resource group and cluster. It does not use or modi
 
 ## Prerequisites, cost, and scope
 
-Use a dedicated subscription or resource group, Azure CLI, PowerShell 7.4+, and `kubectl`. The operator needs permission to create AKS clusters and node pools. Select a region where a supported AMD confidential VM size such as `Standard_DC4as_v5` is available to the subscription with enough family quota.
+Use a dedicated subscription or resource group, Azure CLI, Linux Bash, `jq`, and `kubectl`. The operator needs permission to create AKS clusters and node pools. Select a region where a supported AMD confidential VM size such as `Standard_DC4as_v5` is available to the subscription with enough family quota.
 
 Budget for two system nodes, one ordinary user node, and one confidential user node during the active exercise. Confidential VM availability and price vary by region and agreement. The lab uses Linux; Windows, Intel TDX, FIPS, ARM64, Trusted Launch, pod sandboxing, confidential containers, and node auto-provisioning are not combined with the CVM pool.
 
@@ -16,9 +16,11 @@ Use only synthetic data. A CVM node pool protects VM memory and state from the h
 
 Create an ignored disposable folder for manifests and evidence:
 
-```powershell
-$Work = Join-Path $env:TEMP 'aks-confidential-compute-lab'
-New-Item -ItemType Directory -Path $Work -Force | Out-Null
+```bash
+set -euo pipefail
+umask 077
+Work=$(mktemp -d "${TMPDIR:-/tmp}/aks-confidential-compute-lab.XXXXXXXX")
+printf 'Working folder: %s\n' "$Work"
 ```
 
 ## 1. Choose the confidential-computing boundary
@@ -53,19 +55,19 @@ Successful placement proves only that the scheduler used the intended node pool.
 
 Set unique values and verify subscription context:
 
-```powershell
-$SubscriptionId = az account show --query id -o tsv
-$Location = 'swedencentral'
-$ResourceGroup = 'rg-aks-confidential-lab'
-$ClusterName = 'aks-confidential-lab'
-$SystemVmSize = 'Standard_D4ds_v5'
-$OrdinaryVmSize = 'Standard_D4ds_v5'
-$ConfidentialVmSize = 'Standard_DC4as_v5'
+```bash
+SubscriptionId=$(az account show --query id -o tsv)
+Location='swedencentral'
+ResourceGroup='rg-aks-confidential-lab'
+ClusterName='aks-confidential-lab'
+SystemVmSize='Standard_D4ds_v5'
+OrdinaryVmSize='Standard_D4ds_v5'
+ConfidentialVmSize='Standard_DC4as_v5'
 
 az account show --query '{subscription:id,name:name,tenant:tenantId}' -o table
-az aks get-versions --location $Location -o table
-az vm list-usage --location $Location -o table
-az vm list-skus --location $Location --size $ConfidentialVmSize --all `
+az aks get-versions --location "$Location" -o table
+az vm list-usage --location "$Location" -o table
+az vm list-skus --location "$Location" --size "$ConfidentialVmSize" --all \
   --query "[].{name:name,zones:locationInfo[0].zones,restrictions:restrictions,capabilities:capabilities}" -o json
 ```
 
@@ -73,21 +75,21 @@ Confirm the size is an AKS-supported AMD confidential VM SKU and has no subscrip
 
 Create the cluster and ordinary user pool:
 
-```powershell
-az group create --name $ResourceGroup --location $Location `
-  --tags purpose=aks-confidential-compute-lab owner=$env:USERNAME
+```bash
+az group create --name "$ResourceGroup" --location "$Location" \
+  --tags purpose=aks-confidential-compute-lab "owner=$(id -un)"
 
-az aks create --resource-group $ResourceGroup --name $ClusterName `
-  --location $Location --nodepool-name system `
-  --node-count 2 --node-vm-size $SystemVmSize `
-  --node-taints CriticalAddonsOnly=true:NoSchedule `
+az aks create --resource-group "$ResourceGroup" --name "$ClusterName" \
+  --location "$Location" --nodepool-name system \
+  --node-count 2 --node-vm-size "$SystemVmSize" \
+  --node-taints CriticalAddonsOnly=true:NoSchedule \
   --generate-ssh-keys
 
-az aks nodepool add --resource-group $ResourceGroup --cluster-name $ClusterName `
-  --name ordinary --mode User --node-count 1 --node-vm-size $OrdinaryVmSize `
+az aks nodepool add --resource-group "$ResourceGroup" --cluster-name "$ClusterName" \
+  --name ordinary --mode User --node-count 1 --node-vm-size "$OrdinaryVmSize" \
   --labels workload-tier=ordinary
 
-az aks get-credentials --resource-group $ResourceGroup --name $ClusterName --overwrite-existing
+az aks get-credentials --resource-group "$ResourceGroup" --name "$ClusterName" --overwrite-existing
 kubectl get nodes -L agentpool,kubernetes.azure.com/mode,workload-tier
 ```
 
@@ -106,19 +108,19 @@ Verify both the VM SKU and the CVM-specific node image. Do not treat a custom la
 
 Add the CVM pool:
 
-```powershell
-az aks nodepool add --resource-group $ResourceGroup --cluster-name $ClusterName `
-  --name cvm --mode User --node-count 1 --node-vm-size $ConfidentialVmSize `
-  --os-type Linux --os-sku AzureLinux `
-  --labels workload-tier=confidential `
-  --node-taints workload-tier=confidential:NoSchedule `
+```bash
+az aks nodepool add --resource-group "$ResourceGroup" --cluster-name "$ClusterName" \
+  --name cvm --mode User --node-count 1 --node-vm-size "$ConfidentialVmSize" \
+  --os-type Linux --os-sku AzureLinux \
+  --labels workload-tier=confidential \
+  --node-taints workload-tier=confidential:NoSchedule \
   --enable-cluster-autoscaler --min-count 0 --max-count 2
 ```
 
 Verify the Azure configuration:
 
-```powershell
-az aks nodepool show -g $ResourceGroup --cluster-name $ClusterName -n cvm `
+```bash
+az aks nodepool show -g "$ResourceGroup" --cluster-name "$ClusterName" -n cvm \
   --query '{vmSize:vmSize,osType:osType,osSku:osSKU,nodeImageVersion:nodeImageVersion,count:count,min:minCount,max:maxCount,autoscaling:enableAutoScaling,taints:nodeTaints,labels:nodeLabels}' -o json
 ```
 
@@ -126,10 +128,10 @@ The `vmSize` must be the selected supported confidential VM size. The `nodeImage
 
 Verify Kubernetes-visible placement metadata:
 
-```powershell
-kubectl get nodes `
+```bash
+kubectl get nodes \
   -L agentpool,workload-tier,kubernetes.azure.com/mode,kubernetes.azure.com/os-sku
-kubectl get nodes -l agentpool=cvm -o jsonpath='{range .items[*]}{.metadata.name}{" taints="}{.spec.taints}{"`n"}{end}'
+kubectl get nodes -l agentpool=cvm -o jsonpath='{range .items[*]}{.metadata.name}{" taints="}{.spec.taints}{"\n"}{end}'
 ```
 
 The CVM node must have `workload-tier=confidential:NoSchedule`. The label is a scheduling input, not independent hardware attestation; the Azure node-pool SKU and image evidence establish the configured platform type.
@@ -147,9 +149,9 @@ Prove the resulting placement from pod, node, and pool evidence. Explain why the
 
 Create the namespace and both deployments:
 
-```powershell
-$MixedManifest = Join-Path $Work 'mixed-workloads.yaml'
-@'
+```bash
+MixedManifest="$Work/mixed-workloads.yaml"
+cat > "$MixedManifest" <<'YAML'
 apiVersion: v1
 kind: Namespace
 metadata:
@@ -227,13 +229,13 @@ spec:
           limits:
             cpu: 100m
             memory: 64Mi
-'@ | Set-Content -Path $MixedManifest -Encoding utf8
+YAML
 
-kubectl apply -f $MixedManifest
+kubectl apply -f "$MixedManifest"
 kubectl rollout status deployment/ordinary-api -n mixed-workloads --timeout=300s
 kubectl rollout status deployment/confidential-api -n mixed-workloads --timeout=300s
 kubectl get pods -n mixed-workloads -o wide
-kubectl get pods -n mixed-workloads `
+kubectl get pods -n mixed-workloads \
   -o custom-columns=POD:.metadata.name,CLASS:.metadata.labels.data-classification,NODE:.spec.nodeName
 kubectl get nodes -L agentpool,workload-tier
 ```
@@ -255,9 +257,9 @@ In a shared platform, prefer policy-controlled labels and admission rules based 
 
 Create the temporary pod:
 
-```powershell
-$TolerationOnlyManifest = Join-Path $Work 'toleration-only.yaml'
-@'
+```bash
+TolerationOnlyManifest="$Work/toleration-only.yaml"
+cat > "$TolerationOnlyManifest" <<'YAML'
 apiVersion: v1
 kind: Pod
 metadata:
@@ -280,9 +282,9 @@ spec:
       limits:
         cpu: 50m
         memory: 32Mi
-'@ | Set-Content -Path $TolerationOnlyManifest -Encoding utf8
+YAML
 
-kubectl apply -f $TolerationOnlyManifest
+kubectl apply -f "$TolerationOnlyManifest"
 kubectl wait pod/toleration-only -n mixed-workloads --for=condition=Ready --timeout=180s
 kubectl get pod toleration-only -n mixed-workloads -o wide
 kubectl delete pod toleration-only -n mixed-workloads --wait=true
@@ -301,28 +303,38 @@ The pod may run on the ordinary or CVM pool depending on scheduler scoring and a
 
 Patch the confidential deployment with an empty toleration list:
 
-```powershell
-kubectl patch deployment confidential-api -n mixed-workloads --type merge `
+```bash
+kubectl patch deployment confidential-api -n mixed-workloads --type merge \
   -p '{"spec":{"template":{"spec":{"tolerations":[]}}}}'
-Start-Sleep -Seconds 15
+sleep 15
 kubectl get pods -n mixed-workloads -o wide
-kubectl get events -n mixed-workloads --sort-by=.lastTimestamp | Select-Object -Last 30
-kubectl rollout status deployment/confidential-api -n mixed-workloads --timeout=30s
+kubectl get events -n mixed-workloads --sort-by=.lastTimestamp | tail -n 30
+if RolloutResult=$(kubectl rollout status deployment/confidential-api -n mixed-workloads --timeout=30s 2>&1); then
+  printf 'Unexpected successful rollout without the CVM toleration; investigate.\n' >&2
+  exit 1
+else
+  printf '%s\n' "$RolloutResult"
+  if [[ "$RolloutResult" != *'timed out waiting for'* ]]; then
+    printf 'Unexpected rollout error; resolve it before continuing.\n' >&2
+    exit 1
+  fi
+  printf 'Rollout timed out as expected; confirm the missing-toleration scheduler events.\n'
+fi
 ```
 
 The rollout status should time out. The new pod requires `agentpool=cvm` but does not tolerate `workload-tier=confidential:NoSchedule`, so no eligible node exists. An old replica may remain Running because the Deployment rolling-update strategy preserves availability; do not mistake that for a successful rollout.
 
 Confirm the ordinary deployment is unaffected:
 
-```powershell
+```bash
 kubectl rollout status deployment/ordinary-api -n mixed-workloads --timeout=60s
 kubectl get pods -n mixed-workloads -l app=ordinary-api -o wide
 ```
 
 Restore the toleration:
 
-```powershell
-kubectl patch deployment confidential-api -n mixed-workloads --type merge `
+```bash
+kubectl patch deployment confidential-api -n mixed-workloads --type merge \
   -p '{"spec":{"template":{"spec":{"tolerations":[{"key":"workload-tier","operator":"Equal","value":"confidential","effect":"NoSchedule"}]}}}}'
 kubectl rollout status deployment/confidential-api -n mixed-workloads --timeout=300s
 kubectl get pods -n mixed-workloads -o wide
@@ -343,15 +355,15 @@ Use either the cluster autoscaler or an explicit scale command. Do not leave a s
 
 Delete only the confidential deployment. Disable autoscaling before an explicit manual scale operation, then scale the pool to zero:
 
-```powershell
+```bash
 kubectl delete deployment confidential-api -n mixed-workloads --wait=true
 kubectl rollout status deployment/ordinary-api -n mixed-workloads --timeout=60s
 
-az aks nodepool update --resource-group $ResourceGroup --cluster-name $ClusterName `
+az aks nodepool update --resource-group "$ResourceGroup" --cluster-name "$ClusterName" \
   --name cvm --disable-cluster-autoscaler
-az aks nodepool scale --resource-group $ResourceGroup --cluster-name $ClusterName `
+az aks nodepool scale --resource-group "$ResourceGroup" --cluster-name "$ClusterName" \
   --name cvm --node-count 0
-az aks nodepool show -g $ResourceGroup --cluster-name $ClusterName -n cvm `
+az aks nodepool show -g "$ResourceGroup" --cluster-name "$ClusterName" -n cvm \
   --query '{count:count,min:minCount,max:maxCount,autoscaling:enableAutoScaling}' -o table
 kubectl get nodes -L agentpool,workload-tier
 kubectl get pods -n mixed-workloads -o wide
@@ -361,36 +373,51 @@ Expected: the CVM pool count reaches zero and both ordinary replicas remain Runn
 
 Re-enable autoscaling with zero as the minimum, reapply the confidential deployment from the original manifest, and observe scale from zero:
 
-```powershell
-az aks nodepool update --resource-group $ResourceGroup --cluster-name $ClusterName `
+```bash
+az aks nodepool update --resource-group "$ResourceGroup" --cluster-name "$ClusterName" \
   --name cvm --enable-cluster-autoscaler --min-count 0 --max-count 2
-$Started = Get-Date
-kubectl apply -f $MixedManifest
-kubectl get pods -n mixed-workloads -w
+Started=$(date +%s)
+kubectl apply -f "$MixedManifest"
+if ScaleResult=$(kubectl rollout status deployment/confidential-api -n mixed-workloads --timeout=600s 2>&1); then
+  printf '%s\n' "$ScaleResult"
+  ScaleFromZeroReady=true
+else
+  printf '%s\n' "$ScaleResult" >&2
+  if [[ "$ScaleResult" != *'timed out waiting for'* ]]; then
+    printf 'Unexpected rollout error; resolve it before considering manual scaling.\n' >&2
+    exit 1
+  fi
+  ScaleFromZeroReady=false
+  printf 'Scale-from-zero observation window expired; inspect events before the explicit recovery below.\n' >&2
+fi
 ```
 
 In another terminal, observe autoscaler and pool state:
 
-```powershell
+```bash
 kubectl get events -n mixed-workloads --sort-by=.lastTimestamp
-az aks nodepool show -g $ResourceGroup --cluster-name $ClusterName -n cvm `
+az aks nodepool show -g "$ResourceGroup" --cluster-name "$ClusterName" -n cvm \
   --query '{count:count,min:minCount,max:maxCount,autoscaling:enableAutoScaling}' -o table
 ```
 
-Stop the watch after the confidential pod is Running:
+After the confidential rollout succeeds, record the duration in the original terminal:
 
-```powershell
-$Elapsed = (Get-Date) - $Started
-"Confidential scale-from-zero time: $($Elapsed.ToString())"
+```bash
+if [[ "$ScaleFromZeroReady" == true ]]; then
+  Elapsed=$(( $(date +%s) - Started ))
+  printf 'Confidential scale-from-zero time: %s seconds\n' "$Elapsed"
+else
+  printf 'Scale-from-zero not yet successful; no successful duration recorded.\n' >&2
+fi
 kubectl get pods -n mixed-workloads -o wide
 ```
 
 If autoscaling does not begin within the approved observation window, inspect cluster-autoscaler status and scheduler events, then explicitly restore one node:
 
-```powershell
-az aks nodepool update --resource-group $ResourceGroup --cluster-name $ClusterName `
+```bash
+az aks nodepool update --resource-group "$ResourceGroup" --cluster-name "$ClusterName" \
   --name cvm --disable-cluster-autoscaler
-az aks nodepool scale --resource-group $ResourceGroup --cluster-name $ClusterName `
+az aks nodepool scale --resource-group "$ResourceGroup" --cluster-name "$ClusterName" \
   --name cvm --node-count 1
 kubectl rollout status deployment/confidential-api -n mixed-workloads --timeout=600s
 ```
@@ -486,20 +513,26 @@ Delete workloads first, scale down the confidential pool, inspect the dedicated 
 <details>
 <summary>Solution: complete teardown</summary>
 
-```powershell
+```bash
 kubectl delete namespace mixed-workloads --ignore-not-found --wait=true
-az aks nodepool update --resource-group $ResourceGroup --cluster-name $ClusterName `
+az aks nodepool update --resource-group "$ResourceGroup" --cluster-name "$ClusterName" \
   --name cvm --disable-cluster-autoscaler
-az aks nodepool scale --resource-group $ResourceGroup --cluster-name $ClusterName `
+az aks nodepool scale --resource-group "$ResourceGroup" --cluster-name "$ClusterName" \
   --name cvm --node-count 0
-az resource list --resource-group $ResourceGroup -o table
+az resource list --resource-group "$ResourceGroup" -o table
 ```
 
 Only after confirming the resource group is the dedicated disposable lab boundary:
 
-```powershell
-az group delete --name $ResourceGroup
-Remove-Item -Path $Work -Recurse -Force
+```bash
+read -r -p "Type $ResourceGroup to confirm the disposable resource-group boundary: " ConfirmGroup
+[[ "$ConfirmGroup" == "$ResourceGroup" ]] || { printf 'Deletion not confirmed.\n' >&2; exit 1; }
+az group delete --name "$ResourceGroup"
+# Preserve evidence outside this disposable folder before confirming its removal.
+read -r -p "Type $Work to confirm local manifest/evidence removal: " ConfirmWork
+[[ "$ConfirmWork" == "$Work" && -d "$Work" && "$Work" == "${TMPDIR:-/tmp}/aks-confidential-compute-lab."* ]] ||
+  { printf 'Local cleanup not confirmed or path is not the lab folder.\n' >&2; exit 1; }
+rm -r -- "$Work"
 ```
 
 The Azure command prompts for confirmation. After deletion completes, check Cost Management and confirm that no role assignments, monitoring resources, disks, snapshots, public IPs, or other artifacts created outside the resource group remain.

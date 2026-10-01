@@ -2,7 +2,9 @@
 
 **Customer:** an engineering team wants self-hosted inference for a synthetic order-support assistant, without turning an unauthenticated model endpoint into a public service. **Time:** 2-4 hours, including provisioning and cleanup. **Result:** a managed KAITO Workspace, verified GPU placement, a measured OpenAI-compatible request, a real network-denial/recovery exercise, and evidence that GPU compute was removed.
 
-**Prerequisites/re-entry.** Optional after labs 1-6, before final teardown. Keep their private management path, Cilium Overlay/UDR network, private ACR and healthy orders GitOps. Labs 7-10 are not prerequisites; if already completed, retain their governance, upgraded versions and restored primary-region state. Run from the repository root in PowerShell 7.4+ on the private management host. The operator needs AKS update and node-pool deletion authority plus Kubernetes platform administration; the image publisher and orders Flux service account must not receive these rights.
+**Prerequisites/re-entry.** Optional after labs 1-6, before final teardown. Keep their private management path, Cilium Overlay/UDR network, private ACR and healthy orders GitOps. Labs 7-10 are not prerequisites; if already completed, retain their governance, upgraded versions and restored primary-region state. Run from the repository root in Linux Bash with `jq`, `curl`, and Python 3 on the private management host. The operator needs AKS update and node-pool deletion authority plus Kubernetes platform administration; the image publisher and orders Flux service account must not receive these rights.
+
+The sourced `./scripts/use-lab.sh` helper supplies JSON strings `Lab` and `Outputs`, absolute repository path `Root`, and the strict `jq -er` accessors `lab_value KEY` and `output_value KEY`. Keep the original shell open between tasks, and never enable shell tracing or record transcripts while handling authentication material.
 
 **Support gate.** Source review: **2026-09-14**. The Microsoft managed AI toolchain operator guide currently maps the add-on to **KAITO 0.6.0**. This exercise uses that release's `kaito.sh/v1beta1` Workspace and `phi-4-mini-instruct` preset, not an example downloaded from `main`. Recheck the managed version and supported AKS/region/SKU combination before execution. Public Azure regions and NVIDIA Linux GPU nodes are the path here; Windows and AMD GPU workspaces are excluded. Do not install an upstream KAITO Helm release, a second GPU operator, NAP or preview extensions over the managed add-on to repair a compatibility problem. The separate **fully managed GPU node-pool feature is preview** in the reviewed documentation and is not required here.
 
@@ -21,30 +23,34 @@ Use only the supplied synthetic prompts. Do not send customer orders, credential
 <details>
 <summary>Solution</summary>
 
-```powershell
-. .\scripts\Use-Lab.ps1
-$KaitoDir = '.\.artifacts\kaito'
-if (Test-Path $KaitoDir) { throw 'Existing KAITO evidence: use the re-entry instructions; do not overwrite the cleanup baseline.' }
-New-Item $KaitoDir -ItemType Directory | Out-Null
-az aks get-credentials -g $Lab.ResourceGroup -n $Lab.ClusterName --overwrite-existing
+```bash
+set -euo pipefail
+umask 077
+source ./scripts/use-lab.sh
+KaitoDir="$Root/.artifacts/kaito"
+if [[ -e "$KaitoDir" ]]; then
+  printf 'Existing KAITO evidence: use the re-entry instructions; do not overwrite the cleanup baseline.\n' >&2
+  exit 1
+fi
+mkdir -p "$KaitoDir"
+az aks get-credentials -g "$(lab_value ResourceGroup)" -n "$(lab_value ClusterName)" --overwrite-existing
 kubelogin convert-kubeconfig -l azurecli
 kubectl config current-context
 kubectl get nodes -o wide
 flux get kustomizations -A
 kubectl -n orders get deployments,hpa,scaledobjects
 
-az aks show -g $Lab.ResourceGroup -n $Lab.ClusterName -o json |
-  Set-Content "$KaitoDir\cluster-before.json"
-az aks nodepool list -g $Lab.ResourceGroup --cluster-name $Lab.ClusterName -o json |
-  Set-Content "$KaitoDir\pools-before.json"
-az vm list-usage -l $Lab.Location -o json | Set-Content "$KaitoDir\quota-before.json"
-az vm list-skus -l $Lab.Location --size Standard_NC24ads_A100_v4 --all -o json |
-  Set-Content "$KaitoDir\sku.json"
-Get-Content "$KaitoDir\quota-before.json"
-Get-Content "$KaitoDir\sku.json"
-az aks update --help | Select-String 'ai-toolchain'
-kubectl get crd -o name | Select-String 'kaito|karpenter'
-kubectl get deployments,daemonsets -A | Select-String 'kaito|gpu|nvidia'
+az aks show -g "$(lab_value ResourceGroup)" -n "$(lab_value ClusterName)" -o json > "$KaitoDir/cluster-before.json"
+az aks nodepool list -g "$(lab_value ResourceGroup)" --cluster-name "$(lab_value ClusterName)" -o json > "$KaitoDir/pools-before.json"
+az vm list-usage -l "$(lab_value Location)" -o json > "$KaitoDir/quota-before.json"
+az vm list-skus -l "$(lab_value Location)" --size Standard_NC24ads_A100_v4 --all -o json > "$KaitoDir/sku.json"
+cat "$KaitoDir/quota-before.json" "$KaitoDir/sku.json"
+az aks update --help | grep 'ai-toolchain'
+# No matches is valid for a pre-install inventory; kubectl errors still stop the shell.
+Crds=$(kubectl get crd -o name)
+if ! grep -E 'kaito|karpenter' <<< "$Crds"; then printf 'No KAITO/Karpenter CRDs found.\n'; fi
+Controllers=$(kubectl get deployments,daemonsets -A)
+if ! grep -E 'kaito|gpu|nvidia' <<< "$Controllers"; then printf 'No matching GPU controllers found.\n'; fi
 ```
 
 Inspect `cluster-before.json`: private API, correct resource ID/location, OIDC enabled, Workload ID enabled, Cilium Overlay and `userDefinedRouting` preserved. Compare unused **both** regional and NCads A100 v4-family vCPUs with the 24-vCPU node; `list-skus` must show no applicable subscription/location restriction. Quota does not guarantee allocation or zone capacity. Do not reuse an unrelated existing GPU pool simply because it fits.
@@ -68,15 +74,14 @@ Record the approved start/deadline, SKU, expected node count, current pricing an
 <details>
 <summary>Solution</summary>
 
-```powershell
-az aks update -g $Lab.ResourceGroup -n $Lab.ClusterName `
+```bash
+az aks update -g "$(lab_value ResourceGroup)" -n "$(lab_value ClusterName)" \
   --enable-ai-toolchain-operator --enable-oidc-issuer
-az aks show -g $Lab.ResourceGroup -n $Lab.ClusterName -o json |
-  Set-Content "$KaitoDir\cluster-with-kaito.json"
-kubectl get deployments,pods -A -o wide | Select-String 'kaito|gpu-provisioner'
-kubectl get deployments -A -o json | Set-Content "$KaitoDir\controllers.json"
+az aks show -g "$(lab_value ResourceGroup)" -n "$(lab_value ClusterName)" -o json > "$KaitoDir/cluster-with-kaito.json"
+kubectl get deployments,pods -A -o wide | grep -E 'kaito|gpu-provisioner'
+kubectl get deployments -A -o json > "$KaitoDir/controllers.json"
 kubectl wait --for=condition=Established crd/workspaces.kaito.sh --timeout=300s
-kubectl get crd workspaces.kaito.sh -o yaml | Set-Content "$KaitoDir\workspace-crd.yaml"
+kubectl get crd workspaces.kaito.sh -o yaml > "$KaitoDir/workspace-crd.yaml"
 kubectl explain workspace.resource --api-version=kaito.sh/v1beta1
 kubectl get workspaces.kaito.sh -A
 ```
@@ -85,8 +90,8 @@ Discover actual managed controller names/namespaces in this output and run `kube
 
 Require no existing Workspace before continuing. Apply the namespace guardrails:
 
-```powershell
-kubectl apply -f .\advanced\kaito\namespace.yaml
+```bash
+kubectl apply -f ./advanced/kaito/namespace.yaml
 kubectl -n kaito-lab get resourcequota,networkpolicy
 kubectl -n kaito-lab get serviceaccount default -o yaml
 kubectl -n kube-system get pods -l k8s-app=kube-dns --show-labels
@@ -109,52 +114,58 @@ Do not install a CPU LimitRange/quota that silently makes the generated model co
 <details>
 <summary>Solution</summary>
 
-```powershell
-Get-Content .\advanced\kaito\workspace.yaml
-kubectl apply --dry-run=server -f .\advanced\kaito\workspace.yaml
-$ProvisionStart = [DateTime]::UtcNow
-kubectl apply -f .\advanced\kaito\workspace.yaml
-kubectl -n kaito-lab get workspace kaito-phi4-mini -w
+```bash
+cat ./advanced/kaito/workspace.yaml
+kubectl apply --dry-run=server -f ./advanced/kaito/workspace.yaml
+ProvisionStart=$(date -u +%FT%TZ)
+printf '%s\n' "$ProvisionStart" > "$KaitoDir/provision-start.txt"
+kubectl apply -f ./advanced/kaito/workspace.yaml
+# A bounded readiness wait replaces an unattended watch.
+if ! kubectl -n kaito-lab wait workspace/kaito-phi4-mini --for=condition=InferenceReady --timeout=1800s; then
+  kubectl -n kaito-lab get workspace,pods -o wide
+  kubectl -n kaito-lab get events --sort-by=.lastTimestamp
+  printf 'Readiness wait failed or expired: inspect the error, approve a new bounded window or complete task 7 cleanup.\n' >&2
+  exit 1
+fi
 ```
 
-In a second management terminal, load `Use-Lab.ps1` and watch Azure pool count and events while the first watch runs:
+In a second management terminal, load `use-lab.sh` and inspect Azure pool count and events while the first wait runs:
 
-```powershell
-. .\scripts\Use-Lab.ps1
-az aks nodepool list -g $Lab.ResourceGroup --cluster-name $Lab.ClusterName `
+```bash
+set -euo pipefail
+source ./scripts/use-lab.sh
+az aks nodepool list -g "$(lab_value ResourceGroup)" --cluster-name "$(lab_value ClusterName)" \
   --query '[].{name:name,count:count,size:vmSize,state:provisioningState,subnet:vnetSubnetId}' -o table
 kubectl get nodes -l kaito-lab=phi4-mini -o wide
 kubectl -n kaito-lab get pods -o wide
 kubectl -n kaito-lab get events --sort-by=.lastTimestamp
 ```
 
-Repeat inspection during provisioning, not unattended overnight. Stop the watch with Ctrl+C, not the operator. Microsoft's guide allows roughly ten minutes for machine readiness and twenty for Workspace readiness, varying with model and allocation. Use a 30-minute overall observation deadline; if it expires, collect diagnostics and either approve a new bounded window or go to task 7.
+Repeat inspection during provisioning, not unattended overnight. Interrupt the wait with Ctrl+C if necessary, not the operator. Microsoft's guide allows roughly ten minutes for machine readiness and twenty for Workspace readiness, varying with model and allocation. The wait has a 30-minute overall observation deadline; if it expires, collect diagnostics and either approve a new bounded window or go to task 7. Exiting the shell does not remove billable allocations.
 
 Once conditions advance, in the original terminal:
 
-```powershell
+```bash
 kubectl -n kaito-lab wait workspace/kaito-phi4-mini --for=condition=ResourceReady --timeout=60s
 kubectl -n kaito-lab wait workspace/kaito-phi4-mini --for=condition=InferenceReady --timeout=60s
 kubectl -n kaito-lab rollout status deployment/kaito-phi4-mini --timeout=60s
-kubectl -n kaito-lab get workspace kaito-phi4-mini -o yaml |
-  Set-Content "$KaitoDir\workspace-ready.yaml"
-kubectl -n kaito-lab get pods -l kaito.sh/workspace=kaito-phi4-mini -o json |
-  Set-Content "$KaitoDir\model-pods.json"
-kubectl -n kaito-lab get service kaito-phi4-mini -o yaml |
-  Set-Content "$KaitoDir\service.yaml"
+kubectl -n kaito-lab get workspace kaito-phi4-mini -o yaml > "$KaitoDir/workspace-ready.yaml"
+kubectl -n kaito-lab get pods -l kaito.sh/workspace=kaito-phi4-mini -o json > "$KaitoDir/model-pods.json"
+kubectl -n kaito-lab get service kaito-phi4-mini -o yaml > "$KaitoDir/service.yaml"
 
-$GpuNodes = kubectl get nodes -l kaito-lab=phi4-mini -o json | ConvertFrom-Json
-if (@($GpuNodes.items).Count -ne 1) { throw 'Expected exactly one labeled GPU node; inspect allocation and cleanup.' }
-$GpuNode = $GpuNodes.items[0]
-$GpuPool = $GpuNode.metadata.labels.agentpool
-if (-not $GpuPool) { throw 'No AKS pool label; identify ownership before continuing.' }
-if ([int]$GpuNode.status.allocatable.'nvidia.com/gpu' -ne 1) { throw 'One schedulable NVIDIA GPU is required.' }
-$BeforePools = @(Get-Content "$KaitoDir\pools-before.json" -Raw | ConvertFrom-Json)
-if ($GpuPool -in $BeforePools.name) { throw 'KAITO selected a pre-existing pool; stop and consult its owner.' }
-az aks nodepool show -g $Lab.ResourceGroup --cluster-name $Lab.ClusterName -n $GpuPool -o json |
-  Set-Content "$KaitoDir\gpu-pool.json"
-$GpuNode.spec.providerID | Set-Content "$KaitoDir\gpu-provider-id.txt"
-kubectl describe node $GpuNode.metadata.name
+GpuNodes=$(kubectl get nodes -l kaito-lab=phi4-mini -o json)
+GpuNode=$(jq -ec '.items | if length == 1 then .[0] else error("Expected exactly one labeled GPU node; inspect allocation and cleanup") end' <<< "$GpuNodes")
+GpuPool=$(jq -er '.metadata.labels.agentpool | select(type == "string" and length > 0)' <<< "$GpuNode")
+jq -e '.status.allocatable["nvidia.com/gpu"] | tonumber == 1' <<< "$GpuNode" > /dev/null ||
+  { printf 'One schedulable NVIDIA GPU is required.\n' >&2; exit 1; }
+BeforePools=$(cat "$KaitoDir/pools-before.json")
+if jq -e --arg pool "$GpuPool" 'any(.[]; .name == $pool)' <<< "$BeforePools" > /dev/null; then
+  printf 'KAITO selected a pre-existing pool; stop and consult its owner.\n' >&2
+  exit 1
+fi
+az aks nodepool show -g "$(lab_value ResourceGroup)" --cluster-name "$(lab_value ClusterName)" -n "$GpuPool" -o json > "$KaitoDir/gpu-pool.json"
+jq -er '.spec.providerID' <<< "$GpuNode" > "$KaitoDir/gpu-provider-id.txt"
+kubectl describe node "$(jq -er '.metadata.name' <<< "$GpuNode")"
 kubectl -n kaito-lab get deployment kaito-phi4-mini -o yaml
 kubectl -n kaito-lab get pods --show-labels
 ```
@@ -178,47 +189,63 @@ Retain both container `imageID` digests and the init-container command identifyi
 
 On a second private-management terminal, check the same context and keep this foreground tunnel open:
 
-```powershell
+```bash
 kubectl config current-context
 kubectl -n kaito-lab port-forward service/kaito-phi4-mini 18080:80 --address 127.0.0.1
 ```
 
 In the original terminal:
 
-```powershell
-$InferenceUri = 'http://127.0.0.1:18080'
-$Models = Invoke-RestMethod "$InferenceUri/v1/models" -TimeoutSec 30
-$Models | ConvertTo-Json -Depth 10 | Set-Content "$KaitoDir\models.json"
-$ModelId = @($Models.data | Where-Object id -EQ 'phi-4-mini-instruct' | ForEach-Object id)
-if ($ModelId.Count -ne 1) { throw 'Expected preset is not uniquely served; inspect the runtime/version, do not guess the model ID.' }
-$Prompt = 'A synthetic order was accepted but is still processing. Explain briefly why acceptance is not fulfillment. Do not invent its status.'
-$Request = @{
-  model = $ModelId[0]
-  messages = @(
-    @{role='system';content='You explain synthetic order processing. You have no access to any order database.'}
-    @{role='user';content=$Prompt}
-  )
-  max_tokens = 64
-  temperature = 0
-  stream = $false
-}
-$Samples = foreach ($Attempt in 1..5) {
-  $Started = [DateTime]::UtcNow
-  $Timer = [Diagnostics.Stopwatch]::StartNew()
-  $Reply = Invoke-RestMethod "$InferenceUri/v1/chat/completions" -Method Post `
-    -ContentType application/json -Body ($Request | ConvertTo-Json -Depth 6) -TimeoutSec 60
-  $Timer.Stop()
-  if ([string]::IsNullOrWhiteSpace($Reply.choices[0].message.content)) { throw 'HTTP success without a nonempty model answer.' }
-  if ($Reply.usage.completion_tokens -gt 64) { throw 'Response exceeded the requested output-token envelope.' }
-  $Reply | ConvertTo-Json -Depth 12 | Set-Content "$KaitoDir\reply-$Attempt.json"
-  [pscustomobject]@{
-    Attempt=$Attempt; Started=$Started; ElapsedMs=$Timer.ElapsedMilliseconds
-    PromptTokens=$Reply.usage.prompt_tokens; CompletionTokens=$Reply.usage.completion_tokens
-    FinishReason=$Reply.choices[0].finish_reason
-  }
-}
-$Samples | ConvertTo-Json | Set-Content "$KaitoDir\inference-samples.json"
-$Samples | Format-Table
+```bash
+InferenceUri='http://127.0.0.1:18080'
+curl --fail-with-body --max-time 30 "$InferenceUri/v1/models" --output "$KaitoDir/models.json"
+ModelId=$(jq -er '[.data[] | select(.id == "phi-4-mini-instruct") | .id] |
+  if length == 1 then .[0] else error("Expected preset is not uniquely served; inspect runtime/version") end' "$KaitoDir/models.json")
+Prompt='A synthetic order was accepted but is still processing. Explain briefly why acceptance is not fulfillment. Do not invent its status.'
+Request=$(jq -n --arg model "$ModelId" --arg prompt "$Prompt" '{
+  model: $model,
+  messages: [
+    {role: "system", content: "You explain synthetic order processing. You have no access to any order database."},
+    {role: "user", content: $prompt}
+  ],
+  max_tokens: 64, temperature: 0, stream: false
+}')
+printf '[]\n' > "$KaitoDir/inference-samples.json"
+for Attempt in {1..5}; do
+  Started=$(date -u +%FT%TZ)
+  if ElapsedSeconds=$(curl --fail-with-body --max-time 60 "$InferenceUri/v1/chat/completions" \
+      --header 'Content-Type: application/json' --data "$Request" \
+      --output "$KaitoDir/reply-$Attempt.json" --write-out '%{time_total}'); then
+    :
+  else
+    CurlStatus=$?
+    jq -n --argjson attempt "$Attempt" --arg started "$Started" --argjson status "$CurlStatus" \
+      '{Attempt: $attempt, Started: $started, CurlExitStatus: $status}' > "$KaitoDir/failed-attempt.json"
+    printf 'Inference HTTP/transport failure; retained response and failed-attempt evidence.\n' >&2
+    exit "$CurlStatus"
+  fi
+  if ! jq -e '
+    (.choices[0].message.content | type == "string" and test("\\S")) and
+    (.usage.prompt_tokens | type == "number" and . >= 0) and
+    (.usage.completion_tokens | type == "number" and . >= 0 and . <= 64) and
+    (.choices[0].finish_reason | type == "string")
+  ' "$KaitoDir/reply-$Attempt.json" > /dev/null; then
+    jq -n --argjson attempt "$Attempt" --arg started "$Started" \
+      '{Attempt: $attempt, Started: $started, Error: "Invalid reply schema, empty answer or token envelope breach"}' \
+      > "$KaitoDir/failed-attempt.json"
+    printf 'Invalid model reply; inspect retained response and failed-attempt evidence.\n' >&2
+    exit 1
+  fi
+  Sample=$(jq --argjson attempt "$Attempt" --arg started "$Started" --argjson elapsed "$ElapsedSeconds" '{
+    Attempt: $attempt, Started: $started, ElapsedMs: ($elapsed * 1000 | round),
+    PromptTokens: .usage.prompt_tokens, CompletionTokens: .usage.completion_tokens,
+    FinishReason: .choices[0].finish_reason
+  }' "$KaitoDir/reply-$Attempt.json")
+  jq --argjson sample "$Sample" '. + [$sample]' "$KaitoDir/inference-samples.json" > "$KaitoDir/inference-samples.tmp"
+  mv "$KaitoDir/inference-samples.tmp" "$KaitoDir/inference-samples.json"
+done
+jq -r '(["Attempt","Started","ElapsedMs","PromptTokens","CompletionTokens","FinishReason"] | @tsv),
+  (.[] | [.Attempt,.Started,.ElapsedMs,.PromptTokens,.CompletionTokens,.FinishReason] | @tsv)' "$KaitoDir/inference-samples.json"
 kubectl -n kaito-lab top pods --containers
 ```
 
@@ -243,15 +270,20 @@ For cost discussion, combine the actual allocated-node duration with the approve
 
 Reuse the already built Python application image by its immutable reference; its app command is overridden and it gets no application secrets or Workload ID:
 
-```powershell
-$ImageReference = kubectl -n orders get deployment order-api -o 'jsonpath={.spec.template.spec.containers[0].image}'
-if ($ImageReference -notmatch '@sha256:[a-f0-9]{64}$') { throw 'Complete lab 4 immutable-image delivery before using the probe.' }
-(Get-Content .\advanced\kaito\client.yaml -Raw).Replace('__IMAGE_REFERENCE__',$ImageReference) |
-  Set-Content "$KaitoDir\client.yaml"
-kubectl apply -f "$KaitoDir\client.yaml"
+```bash
+ImageReference=$(kubectl -n orders get deployment order-api -o 'jsonpath={.spec.template.spec.containers[0].image}')
+[[ "$ImageReference" =~ @sha256:[a-f0-9]{64}$ ]] ||
+  { printf 'Complete lab 4 immutable-image delivery before using the probe.\n' >&2; exit 1; }
+ClientTemplate=$(cat ./advanced/kaito/client.yaml)
+printf '%s\n' "${ClientTemplate//__IMAGE_REFERENCE__/$ImageReference}" > "$KaitoDir/client.yaml"
+if grep -nE '__[A-Z0-9_]+__' "$KaitoDir/client.yaml"; then
+  printf 'Unresolved client manifest placeholders.\n' >&2
+  exit 1
+fi
+kubectl apply -f "$KaitoDir/client.yaml"
 kubectl -n kaito-lab wait pod/inference-probe --for=condition=Ready --timeout=180s
 kubectl -n kaito-lab get networkpolicy
-$Probe = @'
+Probe=$(cat <<'PY'
 import json, socket, urllib.request, urllib.error
 host = "kaito-phi4-mini.kaito-lab.svc.cluster.local"
 ip = socket.gethostbyname(host)
@@ -264,33 +296,34 @@ except urllib.error.URLError as error:
     print(json.dumps({"result": "timeout", "ip": ip}))
 except TimeoutError:
     print(json.dumps({"result": "timeout", "ip": ip}))
-'@
-$Denied = kubectl -n kaito-lab exec inference-probe -- python -c $Probe | ConvertFrom-Json
-$Denied | ConvertTo-Json | Set-Content "$KaitoDir\caller-denied.json"
-if ($Denied.result -ne 'timeout') { throw 'Expected an isolated caller; inspect all additive policies.' }
+PY
+)
+kubectl -n kaito-lab exec inference-probe -- python -c "$Probe" > "$KaitoDir/caller-denied.json"
+jq -e '.result == "timeout"' "$KaitoDir/caller-denied.json" > /dev/null ||
+  { printf 'Expected an isolated caller; inspect all additive policies.\n' >&2; exit 1; }
 ```
 
 DNS failures and connection-refused errors are not accepted as the intended policy timeout. Check the model is still Ready and `/v1/models` still succeeds through the existing tunnel, then apply the narrow allowance:
 
-```powershell
-Invoke-RestMethod "$InferenceUri/v1/models" -TimeoutSec 10
-kubectl apply -f .\advanced\kaito\allow-client.yaml
-Start-Sleep -Seconds 10
-$Allowed = kubectl -n kaito-lab exec inference-probe -- python -c $Probe | ConvertFrom-Json
-$Allowed | ConvertTo-Json | Set-Content "$KaitoDir\caller-allowed.json"
-if ($Allowed.result -ne 'allowed' -or $Allowed.status -ne 200) { throw 'Expected allowed caller; inspect Service targetPort and both policy directions.' }
+```bash
+curl --fail-with-body --max-time 10 "$InferenceUri/v1/models"
+kubectl apply -f ./advanced/kaito/allow-client.yaml
+sleep 10
+kubectl -n kaito-lab exec inference-probe -- python -c "$Probe" > "$KaitoDir/caller-allowed.json"
+jq -e '.result == "allowed" and .status == 200' "$KaitoDir/caller-allowed.json" > /dev/null ||
+  { printf 'Expected allowed caller; inspect Service targetPort and both policy directions.\n' >&2; exit 1; }
 ```
 
 The policies allow ingress only to pods labeled `kaito.sh/workspace=kaito-phi4-mini`, from `app=inference-probe` **in this namespace**, and matching client egress to TCP 5000, the pod target port. They do not allow Ray/dashboard traffic. If service translation behaves differently on the live dataplane, inspect Cilium flow evidence before changing policy; do not replace a precise allowance with all ports/destinations.
 
 Remove the temporary allowance and verify the new connection is denied again:
 
-```powershell
-kubectl delete -f .\advanced\kaito\allow-client.yaml
-Start-Sleep -Seconds 10
-$DeniedAgain = kubectl -n kaito-lab exec inference-probe -- python -c $Probe | ConvertFrom-Json
-$DeniedAgain | ConvertTo-Json | Set-Content "$KaitoDir\caller-denied-again.json"
-if ($DeniedAgain.result -ne 'timeout') { throw 'Isolation was not restored; inspect policy propagation and connection state.' }
+```bash
+kubectl delete -f ./advanced/kaito/allow-client.yaml
+sleep 10
+kubectl -n kaito-lab exec inference-probe -- python -c "$Probe" > "$KaitoDir/caller-denied-again.json"
+jq -e '.result == "timeout"' "$KaitoDir/caller-denied-again.json" > /dev/null ||
+  { printf 'Isolation was not restored; inspect policy propagation and connection state.\n' >&2; exit 1; }
 kubectl -n kaito-lab delete pod inference-probe
 ```
 
@@ -307,13 +340,13 @@ This deny/allow/deny sequence plus unchanged model health provides stronger attr
 <details>
 <summary>Solution</summary>
 
-```powershell
+```bash
 kubectl -n kaito-lab describe workspace kaito-phi4-mini
 kubectl -n kaito-lab get events --sort-by=.lastTimestamp
 kubectl -n kaito-lab describe pod -l kaito.sh/workspace=kaito-phi4-mini
 kubectl -n kaito-lab logs deployment/kaito-phi4-mini -c model-weights-downloader --tail=80
 kubectl -n kaito-lab logs deployment/kaito-phi4-mini -c kaito-phi4-mini --tail=80
-az aks nodepool list -g $Lab.ResourceGroup --cluster-name $Lab.ClusterName -o table
+az aks nodepool list -g "$(lab_value ResourceGroup)" --cluster-name "$(lab_value ClusterName)" -o table
 ```
 
 Run log commands separately and only for containers discovered in the pod. A container that never started has no runtime logs; that absence is useful, not an excuse to ignore scheduler or init-container evidence. Discover controller names from task 2 for platform logs. Retain only synthetic data and redact identity/personal information before sharing.
@@ -343,68 +376,76 @@ For model changes, treat the Workspace/runtime configuration as the desired sour
 <details>
 <summary>Solution</summary>
 
-Stop the port-forward terminal with Ctrl+C. In the original terminal (or after dot-sourcing `Use-Lab.ps1` and setting `$KaitoDir = '.\.artifacts\kaito'` on re-entry), first retain the live allocation inventory, including failed pools that never produced a node:
+Stop the port-forward terminal with Ctrl+C. In the original terminal (or after `set -euo pipefail`, sourcing `./scripts/use-lab.sh` and setting `KaitoDir="$Root/.artifacts/kaito"` on re-entry), first retain the live allocation inventory, including failed pools that never produced a node:
 
-```powershell
-$BeforePools = @(Get-Content "$KaitoDir\pools-before.json" -Raw | ConvertFrom-Json)
-$CurrentPools = @(az aks nodepool list -g $Lab.ResourceGroup --cluster-name $Lab.ClusterName -o json | ConvertFrom-Json)
-$NewPools = @($CurrentPools | Where-Object name -NotIn $BeforePools.name)
-$NewPools | ConvertTo-Json -Depth 20 | Set-Content "$KaitoDir\new-pools-before-cleanup.json"
-$NewPools | Select-Object name,id,vmSize,count,provisioningState,nodeLabels | Format-List
-$HasNamespace = [bool](kubectl get namespace kaito-lab --ignore-not-found -o name)
-$HasWorkspaceApi = [bool](kubectl get crd workspaces.kaito.sh --ignore-not-found -o name)
-if ($HasNamespace) {
+```bash
+BeforePools=$(cat "$KaitoDir/pools-before.json")
+CurrentPools=$(az aks nodepool list -g "$(lab_value ResourceGroup)" --cluster-name "$(lab_value ClusterName)" -o json)
+NewPools=$(jq --argjson before "$BeforePools" '[.[] | select(.name as $name | all($before[]; .name != $name))]' <<< "$CurrentPools")
+printf '%s\n' "$NewPools" > "$KaitoDir/new-pools-before-cleanup.json"
+jq '.[] | {name,id,vmSize,count,provisioningState,nodeLabels}' <<< "$NewPools"
+HasNamespace=$(kubectl get namespace kaito-lab --ignore-not-found -o name)
+HasWorkspaceApi=$(kubectl get crd workspaces.kaito.sh --ignore-not-found -o name)
+if [[ -n "$HasNamespace" ]]; then
   kubectl -n kaito-lab get pods,service -o wide
-  if ($HasWorkspaceApi) { kubectl -n kaito-lab get workspace -o wide }
-}
+  if [[ -n "$HasWorkspaceApi" ]]; then kubectl -n kaito-lab get workspace -o wide; fi
+fi
 kubectl get nodes -l kaito-lab=phi4-mini -o wide
 ```
 
 Correlate each candidate with this Workspace's labels, recorded pool/provider IDs, creation time and managed provisioner/Activity Log evidence. **A new pool is a candidate, not deletion authorization.** A partial failure might leave a pool with no node label; use its ARM provisioning record and controller evidence. Resolve ambiguous/shared ownership before deleting anything, and do not let an unresolved allocation disappear from the cleanup record.
 
-```powershell
-if ($HasNamespace) {
-  if ($HasWorkspaceApi) {
+```bash
+if [[ -n "$HasNamespace" ]]; then
+  if [[ -n "$HasWorkspaceApi" ]]; then
     kubectl -n kaito-lab delete workspace kaito-phi4-mini --ignore-not-found --wait=true --timeout=300s
-  }
-  $HasDeployment = [bool](kubectl -n kaito-lab get deployment kaito-phi4-mini --ignore-not-found -o name)
-  if ($HasDeployment) { kubectl -n kaito-lab wait --for=delete deployment/kaito-phi4-mini --timeout=180s }
+  fi
+  HasDeployment=$(kubectl -n kaito-lab get deployment kaito-phi4-mini --ignore-not-found -o name)
+  if [[ -n "$HasDeployment" ]]; then kubectl -n kaito-lab wait --for=delete deployment/kaito-phi4-mini --timeout=180s; fi
   kubectl -n kaito-lab get pods,service
-}
+fi
 ```
 
 Require generated model workloads to be gone before deleting a GPU pool. A failed deployment might never have created the namespace/Deployment; record that absence rather than recreating it for cleanup. If the Workspace API was unexpectedly removed while its workloads/pools remain, stop and restore supported controller cleanup rather than treating the missing API as success. If a probe/allowance remains after interruption, remove only those known lab resources:
 
-```powershell
-if ($HasNamespace) {
-  kubectl delete -f .\advanced\kaito\allow-client.yaml --ignore-not-found
+```bash
+if [[ -n "$HasNamespace" ]]; then
+  kubectl delete -f ./advanced/kaito/allow-client.yaml --ignore-not-found
   kubectl -n kaito-lab delete pod inference-probe --ignore-not-found
-}
+fi
 ```
 
 For **each** positively identified lab GPU pool, execute this block individually. It deliberately refuses a baseline pool or an unreviewed SKU:
 
-```powershell
-$DeletePool = Read-Host 'Exact verified lab GPU pool name to delete'
-if (-not $DeletePool -or $DeletePool -in $BeforePools.name) { throw 'Refusing an empty or baseline pool name.' }
-$Candidate = @($NewPools | Where-Object name -EQ $DeletePool)
-if ($Candidate.Count -ne 1 -or $Candidate[0].vmSize -ne 'Standard_NC24ads_A100_v4') {
-  throw 'Pool does not match the reviewed new GPU inventory; investigate before deletion.'
-}
-az aks nodepool show -g $Lab.ResourceGroup --cluster-name $Lab.ClusterName -n $DeletePool -o json
-if ((Read-Host "Type $DeletePool to confirm deletion after verifying ownership") -cne $DeletePool) { throw 'Deletion not confirmed.' }
-az aks nodepool delete -g $Lab.ResourceGroup --cluster-name $Lab.ClusterName -n $DeletePool
+```bash
+read -r -p 'Exact verified lab GPU pool name to delete: ' DeletePool
+if [[ -z "$DeletePool" ]] || jq -e --arg pool "$DeletePool" 'any(.[]; .name == $pool)' <<< "$BeforePools" > /dev/null; then
+  printf 'Refusing an empty or baseline pool name.\n' >&2
+  exit 1
+fi
+Candidate=$(jq --arg pool "$DeletePool" '[.[] | select(.name == $pool)]' <<< "$NewPools")
+jq -e 'length == 1 and .[0].vmSize == "Standard_NC24ads_A100_v4"' <<< "$Candidate" > /dev/null ||
+  { printf 'Pool does not match the reviewed new GPU inventory; investigate before deletion.\n' >&2; exit 1; }
+az aks nodepool show -g "$(lab_value ResourceGroup)" --cluster-name "$(lab_value ClusterName)" -n "$DeletePool" -o json
+read -r -p "Type $DeletePool to confirm deletion after verifying ownership: " ConfirmPool
+[[ "$ConfirmPool" == "$DeletePool" ]] || { printf 'Deletion not confirmed.\n' >&2; exit 1; }
+az aks nodepool delete -g "$(lab_value ResourceGroup)" --cluster-name "$(lab_value ClusterName)" -n "$DeletePool"
 ```
 
 Wait for completion; do not use `--no-wait` and immediately assume charges stopped. If no new pool ever existed, retain that inventory as the reason no pool deletion ran. Inspect the node resource group for remaining VMSS/VM/disk resources attributable to this attempt, including any failed allocations not present in the AKS pool list:
 
-```powershell
-$ClusterNow = az aks show -g $Lab.ResourceGroup -n $Lab.ClusterName -o json | ConvertFrom-Json
-az resource list -g $ClusterNow.nodeResourceGroup -o table
-az aks nodepool list -g $Lab.ResourceGroup --cluster-name $Lab.ClusterName -o json |
-  Set-Content "$KaitoDir\pools-after.json"
-$AfterPools = @(Get-Content "$KaitoDir\pools-after.json" -Raw | ConvertFrom-Json)
-Compare-Object @($BeforePools.name) @($AfterPools.name)
+```bash
+ClusterNow=$(az aks show -g "$(lab_value ResourceGroup)" -n "$(lab_value ClusterName)" -o json)
+az resource list -g "$(jq -er '.nodeResourceGroup' <<< "$ClusterNow")" -o table
+az aks nodepool list -g "$(lab_value ResourceGroup)" --cluster-name "$(lab_value ClusterName)" -o json > "$KaitoDir/pools-after.json"
+AfterPools=$(cat "$KaitoDir/pools-after.json")
+jq --argjson before "$BeforePools" '{
+  Removed: (($before | map(.name)) - (map(.name))),
+  Added: ((map(.name)) - ($before | map(.name)))
+}' <<< "$AfterPools" > "$KaitoDir/pool-differences.json"
+cat "$KaitoDir/pool-differences.json"
+jq -e '.Removed == [] and .Added == []' "$KaitoDir/pool-differences.json" > /dev/null ||
+  { printf 'Pool inventory differs from baseline; resolve ownership and cleanup.\n' >&2; exit 1; }
 kubectl get nodes -l kaito-lab=phi4-mini
 ```
 
@@ -412,22 +453,30 @@ Expected: no name differences and no lab GPU nodes. This comparison does not pro
 
 Only after Workspace/pool cleanup, delete the lab namespace. If this exercise newly enabled the add-on and no other Workspace/owner now uses it, restore the original disabled state through the managed command; otherwise explicitly retain it with its owner's agreement:
 
-```powershell
-if ($HasWorkspaceApi) { kubectl get workspaces.kaito.sh -A }
-if ($HasNamespace) { kubectl delete namespace kaito-lab --wait=true --timeout=180s }
+```bash
+if [[ -n "$HasWorkspaceApi" ]]; then kubectl get workspaces.kaito.sh -A; fi
+if [[ -n "$HasNamespace" ]]; then kubectl delete namespace kaito-lab --wait=true --timeout=180s; fi
 # Only if the pre-change record shows the add-on was absent and no other owner uses it:
-az aks update -g $Lab.ResourceGroup -n $Lab.ClusterName --disable-ai-toolchain-operator
+read -r -p 'Type DISABLE only if the baseline was disabled and no other owner uses KAITO (otherwise RETAIN): ' AddonDisposition
+case "$AddonDisposition" in
+  DISABLE) az aks update -g "$(lab_value ResourceGroup)" -n "$(lab_value ClusterName)" --disable-ai-toolchain-operator ;;
+  RETAIN) printf 'Managed add-on retained with platform-owner agreement.\n' ;;
+  *) printf 'Add-on disposition not confirmed.\n' >&2; exit 1 ;;
+esac
+printf '%s\n' "$AddonDisposition" > "$KaitoDir/addon-disposition.txt"
 ```
 
 Review `cluster-before.json` against current add-on state before that final command; it is not an unconditional cleanup step. Retain managed CRDs/identities according to the supported disable lifecycle, not by blanket deletion of `kaito`/`karpenter` resources or role assignments. Inventory any remaining add-on identity/federation and document its owner/disposition.
 
-```powershell
+```bash
 flux get kustomizations -A
 kubectl -n orders get deployments,hpa,scaledobjects
 kubectl -n orders describe scaledobject order-worker
-az aks nodepool list -g $Lab.ResourceGroup --cluster-name $Lab.ClusterName -o table
-$OrdersUri = (Read-Host 'Currently active trusted orders HTTPS URL: Lab 3 private or Lab 10 edge').TrimEnd('/')
-Invoke-RestMethod "$OrdersUri/readyz" -TimeoutSec 30
+az aks nodepool list -g "$(lab_value ResourceGroup)" --cluster-name "$(lab_value ClusterName)" -o table
+read -r -p 'Currently active trusted orders HTTPS URL: Lab 3 private or Lab 10 edge: ' OrdersUri
+OrdersUri="${OrdersUri%/}"
+[[ "$OrdersUri" == https://* ]] || { printf 'Supply the trusted HTTPS URL.\n' >&2; exit 1; }
+curl --fail-with-body --max-time 30 "$OrdersUri/readyz"
 ```
 
 Require healthy orders reconciliation/API and a healthy worker scaler; zero workers with an empty queue is normal. Preserve the primary cluster's progressed settings, not a redeployment of `infra/main.bicep`. Retain redacted evidence locally, check Cost Management after its reporting delay, and resume the next cumulative lab. GPU cleanup is immediate; regular lab infrastructure remains until the README's final teardown.

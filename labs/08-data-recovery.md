@@ -2,7 +2,7 @@
 
 **Customer:** durable order processing, shared files and a tested recovery plan. **Time:** 4–6 hours plus provisioning/backup time. **Result:** passwordless PostgreSQL, Disk/Files CSI evidence, an actual AKS Backup restore with a matching hash, and a separate PostgreSQL point-in-time restore.
 
-Required after labs 1–7. Budget for PostgreSQL General Purpose, storage, backup snapshots and restore servers. Run from the root on a private management host. Install PostgreSQL **17 or later client tools** (`psql`, `pg_dump`, `pg_restore`) on that host through your approved package process; `sslrootcert=system` requires a recent libpq. No PostgreSQL password or Azure token belongs in Git or a transcript.
+Required after labs 1–7. Budget for PostgreSQL General Purpose, storage, backup snapshots and restore servers. Run Bash from the repository root on a private Linux management host, with `set -euo pipefail` in each terminal. Use Azure CLI, kubectl, Flux CLI, Git, GitHub CLI, `jq`, `curl` (supporting `--fail-with-body`), `python3`, `openssl`, and `dig`/`getent`. Install PostgreSQL **17 or later client tools** (`psql`, `pg_dump`, `pg_restore`) on that host through your approved package process; `sslrootcert=system` requires a recent libpq. No PostgreSQL password or Azure token belongs in Git or a transcript; do not enable `set -x`. Solutions share a terminal unless stated otherwise. On re-entry, source `use-lab.sh`, reload the JSON outputs (`Out`, `PgOut`), signed-in administrator and database names/host, and recover saved order/hash/backup evidence before continuing.
 
 ## 1. Inspect the exact recovery support boundary
 
@@ -17,21 +17,21 @@ Azure Files SMB backup is currently documented but **private-endpoint Azure File
 <details>
 <summary>Solution</summary>
 
-```powershell
-. .\scripts\Use-Lab.ps1
-$ErrorActionPreference = 'Stop'
-$PSNativeCommandUseErrorActionPreference = $true
-New-Item .\.artifacts\advanced -ItemType Directory -Force | Out-Null
-$Out = az deployment group show -g $Lab.ResourceGroup -n foundation --query properties.outputs -o json | ConvertFrom-Json
-$AppKustomization = 'orders'
-$GitSource = 'flux-system'
-$FluxNamespace = 'flux-system'
-$Pg = "$($Lab.Prefix)-pg"
-$PgRestore = "$($Lab.Prefix)-pg-pitr"
-$Admin = az ad signed-in-user show -o json | ConvertFrom-Json
-Get-Command psql,pg_dump,pg_restore
-az postgres flexible-server list-skus -l $Lab.Location -o table
-az aks show -g $Lab.ResourceGroup -n $Lab.ClusterName --query '{version:kubernetesVersion,storage:storageProfile,identity:identity}'
+```bash
+set -euo pipefail
+source ./scripts/use-lab.sh
+mkdir -p .artifacts/advanced
+Out=$(az deployment group show -g "$(lab_value ResourceGroup)" -n foundation --query properties.outputs -o json)
+AppKustomization=orders
+GitSource=flux-system
+FluxNamespace=flux-system
+Pg="$(lab_value Prefix)-pg"
+PgRestore="$(lab_value Prefix)-pg-pitr"
+Admin=$(az ad signed-in-user show -o json)
+for Tool in psql pg_dump pg_restore; do command -v "$Tool"; done
+psql --version
+az postgres flexible-server list-skus -l "$(lab_value Location)" -o table
+az aks show -g "$(lab_value ResourceGroup)" -n "$(lab_value ClusterName)" --query '{version:kubernetesVersion,storage:storageProfile,identity:identity}'
 kubectl get csidrivers
 ```
 
@@ -50,17 +50,23 @@ Allow TCP 5432 to this PE address in the application's egress NetworkPolicy; als
 <details>
 <summary>Solution</summary>
 
-```powershell
-az deployment group create -g $Lab.ResourceGroup -n postgres -f .\advanced\postgres.bicep `
-  -p "serverName=$Pg" "location=$($Lab.Location)" "adminObjectId=$($Admin.id)" "adminLogin=$($Admin.userPrincipalName)"
-$PgOut = az deployment group show -g $Lab.ResourceGroup -n postgres --query properties.outputs -o json | ConvertFrom-Json
-.\advanced\New-PrivateEndpoint.ps1 -ResourceGroup $Lab.ResourceGroup -Location $Lab.Location `
-  -Name "$($Lab.Prefix)-pg-pe" -ResourceId $PgOut.serverId.value -GroupId postgresqlServer `
-  -SubnetId $Out.endpointsSubnetId.value -VnetId $Out.vnetId.value -ZoneName privatelink.postgres.database.azure.com
-$PgHost = $PgOut.hostname.value
-Resolve-DnsName $PgHost
-Test-NetConnection $PgHost -Port 5432
-az postgres flexible-server show -g $Lab.ResourceGroup -n $Pg --query network.publicNetworkAccess -o tsv
+```bash
+az deployment group create -g "$(lab_value ResourceGroup)" -n postgres -f ./advanced/postgres.bicep \
+  -p "serverName=$Pg" "location=$(lab_value Location)" "adminObjectId=$(jq -er '.id' <<< "$Admin")" "adminLogin=$(jq -er '.userPrincipalName' <<< "$Admin")"
+PgOut=$(az deployment group show -g "$(lab_value ResourceGroup)" -n postgres --query properties.outputs -o json)
+bash ./advanced/new-private-endpoint.sh --resource-group "$(lab_value ResourceGroup)" --location "$(lab_value Location)" \
+  --name "$(lab_value Prefix)-pg-pe" --resource-id "$(jq -er '.serverId.value' <<< "$PgOut")" --group-id postgresqlServer \
+  --subnet-id "$(jq -er '.endpointsSubnetId.value' <<< "$Out")" --vnet-id "$(jq -er '.vnetId.value' <<< "$Out")" --zone-name privatelink.postgres.database.azure.com
+PgHost=$(jq -er '.hostname.value' <<< "$PgOut")
+dig +short "$PgHost" A
+getent ahostsv4 "$PgHost"
+python3 - "$PgHost" <<'PY'
+import socket
+import sys
+with socket.create_connection((sys.argv[1], 5432), timeout=10):
+    print("PostgreSQL TCP 5432 reachable")
+PY
+az postgres flexible-server show -g "$(lab_value ResourceGroup)" -n "$Pg" --query network.publicNetworkAccess -o tsv
 ```
 
 Expected: a private address, TCP 5432 reachable from the management host, and public network access Disabled. This is **Private Link networking**, not the mutually exclusive delegated-subnet VNet-integration model. A failed DNS lookup points to PE/zone-link configuration; a private address with failed TCP points to routing/firewall reachability, before SQL authentication is relevant.
@@ -80,9 +86,9 @@ The rollout restart below is an explicit, recorded operations action, not a repl
 <details>
 <summary>Solution</summary>
 
-```powershell
-.\advanced\Initialize-OrdersDatabase.ps1 -HostName $PgHost -AdminLogin $Admin.userPrincipalName `
-  -ApiPrincipalId $Out.apiPrincipalId.value -WorkerPrincipalId $Out.workerPrincipalId.value
+```bash
+bash ./advanced/initialize-orders-database.sh --host-name "$PgHost" --admin-login "$(jq -er '.userPrincipalName' <<< "$Admin")" \
+  --api-principal-id "$(jq -er '.apiPrincipalId.value' <<< "$Out")" --worker-principal-id "$(jq -er '.workerPrincipalId.value' <<< "$Out")"
 ```
 
 The script creates database principals `orders_api` and `orders_worker` using their **object/principal IDs**, not client IDs. It creates:
@@ -94,11 +100,20 @@ processed_orders(order_id text PRIMARY KEY, item text NOT NULL,
 
 API gets SELECT; worker gets INSERT and SELECT. The worker's `INSERT ... ON CONFLICT DO NOTHING` makes repeated deliveries of an **identical ID and item** idempotent, then it completes the Service Bus message. This is not global exactly-once delivery. Reusing an ID with a different item is explicitly rejected by this application's worker and sent to the dead-letter queue; it does not update the stored item.
 
-The lab-4 production source is `gitops\clusters\primary\apps\orders` and its reconciler is `orders` in `flux-system`. Generate and add a database patch plus a private-IP egress policy using the existing lab-4 helper:
+The lab-4 production source is `gitops/clusters/primary/apps/orders` and its reconciler is `orders` in `flux-system`. Generate and add a database patch plus a private-IP egress policy using the existing lab-4 helper:
 
-```powershell
-$PgIp = (Resolve-DnsName $PgHost -Type A | Where-Object IPAddress | Select-Object -First 1).IPAddress
-.\advanced\Set-PrimaryDatabase.ps1 -HostName $PgHost -PrivateIp $PgIp
+```bash
+Addresses=$(getent ahostsv4 "$PgHost")
+PgIp=$(awk 'NR == 1 {print $1}' <<< "$Addresses")
+python3 - "$PgIp" <<'PY'
+import ipaddress
+import sys
+address = ipaddress.IPv4Address(sys.argv[1])
+private_ranges = [ipaddress.ip_network(value) for value in ("10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16")]
+if not any(address in network for network in private_ranges):
+    raise SystemExit("Expected the PostgreSQL private-endpoint IPv4 address.")
+PY
+bash ./advanced/set-primary-database.sh --host-name "$PgHost" --private-ip "$PgIp"
 ```
 
 This adds the following values to the production source deployments' `env` lists (without replacing existing identity/Service Bus/ROLE values):
@@ -118,12 +133,12 @@ This adds the following values to the production source deployments' `env` lists
 
 `DefaultAzureCredential` uses each pod's Workload ID and requests `https://ossrdbms-aad.database.windows.net/.default`; it refreshes tokens when opening connections. The application verifies PostgreSQL TLS with `sslmode=verify-full` and `/etc/ssl/certs/ca-certificates.crt` inside the Linux container; retain the image's CA bundle and use the server FQDN, not a private IP, for `POSTGRES_HOST`. No `POSTGRES_PASSWORD` secret is added. Ensure both images include the PostgreSQL integration from the shared app contract.
 
-```powershell
+```bash
 git diff
-git add .\gitops\clusters\primary\apps\orders
-.\advanced\Publish-ReviewedChange.ps1 -Message "Use private passwordless durable order storage"
+git add ./gitops/clusters/primary/apps/orders
+bash ./advanced/publish-reviewed-change.sh --message "Use private passwordless durable order storage"
 # Use the exact Flux names recorded in lab 7.
-flux reconcile kustomization $AppKustomization -n $FluxNamespace --with-source
+flux reconcile kustomization "$AppKustomization" -n "$FluxNamespace" --with-source
 kubectl rollout status deployment/order-api -n orders --timeout=300s
 kubectl rollout status deployment/order-worker -n orders --timeout=300s
 # KEDA may keep an empty-queue worker at zero; submit an order before requiring worker logs.
@@ -133,70 +148,83 @@ If the lab-4 source lives outside `k8s`, stage its actual path instead. Expected
 
 Post an order through the lab-3 TLS application URL, wait for durable processing, restart the worker and verify it still exists:
 
-```powershell
-$AppUrl = Read-Host 'Lab 3 HTTPS application base URL, no trailing slash'
-$Order = @{id="durable-$([guid]::NewGuid().ToString('N'))";item='blue-widget'}
-$Order | ConvertTo-Json | Set-Content .\.artifacts\advanced\durable-order.json
-Invoke-RestMethod "$AppUrl/orders" -Method Post -ContentType application/json -Body ($Order | ConvertTo-Json)
+```bash
+read -r -p 'Lab 3 HTTPS application base URL: ' AppUrl
+AppUrl=${AppUrl%/}
+[[ "$AppUrl" == https://* ]] || { printf '%s\n' 'Use the trusted HTTPS application URL.' >&2; exit 1; }
+Order=$(jq -nc --arg id "durable-$(openssl rand -hex 16)" '{id:$id,item:"blue-widget"}')
+printf '%s\n' "$Order" > .artifacts/advanced/durable-order.json
+OrderId=$(jq -er '.id' <<< "$Order")
+curl --fail-with-body --silent --show-error "$AppUrl/orders" --header 'Content-Type: application/json' --data "$Order"
 # Repeat GET until processed, with a bounded wait.
-$Found = $false
-1..30 | ForEach-Object {
-  if (-not $Found) {
-    try { $Result = Invoke-RestMethod "$AppUrl/orders/$($Order.id)"; $Found = $true }
-    catch [Microsoft.PowerShell.Commands.HttpResponseException] {
-      if ([int]$_.Exception.Response.StatusCode -ne 404) { throw }
-      Start-Sleep 2
-    }
-  }
-}
-if (-not $Found) { throw 'Order did not become durable within 60 seconds.' }
+Found=false
+LookupDeadline=$((SECONDS + 60))
+for i in {1..30}; do
+  Remaining=$((LookupDeadline - SECONDS))
+  ((Remaining > 0)) || break
+  HttpStatus=$(curl --silent --show-error --max-time "$Remaining" --output .artifacts/advanced/order-lookup.json \
+    --write-out '%{http_code}' "$AppUrl/orders/$OrderId")
+  case "$HttpStatus" in
+    200) Result=$(< .artifacts/advanced/order-lookup.json); Found=true; break ;;
+    404)
+      Remaining=$((LookupDeadline - SECONDS))
+      ((Remaining > 0)) || break
+      if ((Remaining > 2)); then sleep 2; else sleep "$Remaining"; fi
+      ;;
+    *) cat .artifacts/advanced/order-lookup.json >&2; printf 'Unexpected lookup HTTP %s\n' "$HttpStatus" >&2; exit 1 ;;
+  esac
+done
+[[ "$Found" == true ]] || { printf '%s\n' 'Order did not become durable within 60 seconds.' >&2; exit 1; }
+jq -e --argjson expected "$Order" '.id == $expected.id and .item == $expected.item' <<< "$Result"
 kubectl rollout restart deployment/order-worker -n orders
 kubectl rollout status deployment/order-worker -n orders --timeout=300s
-Invoke-RestMethod "$AppUrl/orders" -Method Post -ContentType application/json -Body ($Order | ConvertTo-Json)
-Invoke-RestMethod "$AppUrl/orders/$($Order.id)"
+curl --fail-with-body --silent --show-error "$AppUrl/orders" --header 'Content-Type: application/json' --data "$Order"
+curl --fail-with-body --silent --show-error "$AppUrl/orders/$OrderId"
 ```
 
 A rollout restart is an explicit, recorded operations action; it does not replace the Git deployment definition. Confirm SQL count for this ID is exactly one using the read-only `psql` checks below. The pre-lab-8 in-memory deduplication was not durable.
 
 Now exercise the conflicting-ID business rule without mistaking HTTP acceptance for processing:
 
-```powershell
-$DeadLetterBefore = [long](az servicebus queue show -g $Lab.ResourceGroup --namespace-name $Lab.ServiceBusName -n orders --query countDetails.deadLetterMessageCount -o tsv)
-$Conflict = @{id=$Order.id;item='conflicting-red-widget'}
-Invoke-WebRequest "$AppUrl/orders" -Method Post -ContentType application/json -Body ($Conflict | ConvertTo-Json)
+```bash
+DeadLetterBefore=$(az servicebus queue show -g "$(lab_value ResourceGroup)" --namespace-name "$(lab_value ServiceBusName)" -n orders --query countDetails.deadLetterMessageCount -o tsv)
+Conflict=$(jq -nc --arg id "$OrderId" '{id:$id,item:"conflicting-red-widget"}')
+HttpStatus=$(curl --fail-with-body --silent --show-error --output .artifacts/advanced/conflict-response.json \
+  --write-out '%{http_code}' "$AppUrl/orders" --header 'Content-Type: application/json' --data "$Conflict")
+[[ "$HttpStatus" == 202 ]] || { printf 'Expected POST 202, got %s\n' "$HttpStatus" >&2; exit 1; }
 # The POST returns 202 because enqueue succeeded; rejection happens asynchronously.
-$DeadLetterAfter = $DeadLetterBefore
-1..30 | ForEach-Object {
-  if ($DeadLetterAfter -le $DeadLetterBefore) {
-    Start-Sleep 2
-    $DeadLetterAfter = [long](az servicebus queue show -g $Lab.ResourceGroup --namespace-name $Lab.ServiceBusName -n orders --query countDetails.deadLetterMessageCount -o tsv)
-  }
-}
-if ($DeadLetterAfter -le $DeadLetterBefore) { throw 'Expected conflicting order to be dead-lettered; inspect the worker.' }
-$Unchanged = Invoke-RestMethod "$AppUrl/orders/$($Order.id)"
-if ($Unchanged.item -cne $Order.item) { throw 'Conflicting delivery changed the stored order.' }
+DeadLetterAfter=$DeadLetterBefore
+for i in {1..30}; do
+  sleep 2
+  DeadLetterAfter=$(az servicebus queue show -g "$(lab_value ResourceGroup)" --namespace-name "$(lab_value ServiceBusName)" -n orders --query countDetails.deadLetterMessageCount -o tsv)
+  if ((DeadLetterAfter > DeadLetterBefore)); then break; fi
+done
+((DeadLetterAfter > DeadLetterBefore)) || { printf '%s\n' 'Expected conflicting order to be dead-lettered; inspect the worker.' >&2; exit 1; }
+Unchanged=$(curl --fail-with-body --silent --show-error "$AppUrl/orders/$OrderId")
+jq -e --argjson expected "$Order" '.id == $expected.id and .item == $expected.item' <<< "$Unchanged"
 kubectl logs -n orders deployment/order-worker --tail=100
 ```
 
 Expected: worker evidence of `Order ID already exists with a different item`, an `InvalidOrder` dead-letter reason, unchanged original data, and one SQL row for the ID. Inspect the specific message with lab 6's dead-letter tooling: a namespace-wide count alone cannot identify its reason. Before database integration, GET returned 503 by design, not an ingress failure. After integration, POST 202 still means **accepted into the queue**, not durably processed.
 
-Use a fresh Entra token to run these read-only checks on the authoritative database. Keep tokens out of transcripts; the `finally` block removes the token after use:
+Use a fresh Entra token to run these read-only checks on the authoritative database. Keep tokens out of transcripts; a subshell-local `EXIT` trap removes the token after use:
 
-```powershell
-$env:PGHOST = $PgHost
-$env:PGUSER = $Admin.userPrincipalName
-$env:PGDATABASE = 'ordersdb'
-$env:PGSSLMODE = 'verify-full'
-$env:PGSSLROOTCERT = 'system'
-$env:PGPASSWORD = az account get-access-token --resource https://ossrdbms-aad.database.windows.net --query accessToken -o tsv
-try {
+```bash
+export PGHOST="$PgHost"
+export PGUSER="$(jq -er '.userPrincipalName' <<< "$Admin")"
+export PGDATABASE=ordersdb PGSSLMODE=verify-full PGSSLROOTCERT=system
+(
+  set -euo pipefail
+  trap 'unset PGPASSWORD' EXIT
+  PGPASSWORD=$(az account get-access-token --resource https://ossrdbms-aad.database.windows.net --query accessToken -o tsv)
+  export PGPASSWORD
   psql -X --set ON_ERROR_STOP=1 -c "SELECT grantee,privilege_type FROM information_schema.role_table_grants WHERE table_schema='public' AND table_name='processed_orders' AND grantee IN ('orders_api','orders_worker') ORDER BY grantee,privilege_type;"
-@'
+  psql -X --set ON_ERROR_STOP=1 --set "order_id=$OrderId" <<'SQL'
 SELECT order_id, item, count(*) AS copies
 FROM processed_orders WHERE order_id = :'order_id'
 GROUP BY order_id, item;
-'@ | psql -X --set ON_ERROR_STOP=1 --set "order_id=$($Order.id)"
-} finally { Remove-Item Env:PGPASSWORD -ErrorAction SilentlyContinue }
+SQL
+)
 ```
 
 The API has SELECT only and the worker INSERT/SELECT. The count result contains the original item with `copies = 1` after both redelivery tests. This demonstrates durable application idempotency for that business key, not global exactly-once processing.
@@ -214,48 +242,57 @@ Dynamic private Files provisioning needs CSI identity permissions on the VNet/pr
 <details>
 <summary>Solution</summary>
 
-Commit and bootstrap a **platform** Kustomization for `advanced\storage`:
+Commit and bootstrap a **platform** Kustomization for `advanced/storage`:
 
-```powershell
-git add .\advanced\storage
-.\advanced\Publish-ReviewedChange.ps1 -Message "Add CSI storage recovery exercise"
-flux create kustomization storage -n $FluxNamespace --source "GitRepository/$GitSource" --path ./advanced/storage --prune --interval 1m
-flux reconcile kustomization storage -n $FluxNamespace --with-source
+```bash
+git add ./advanced/storage
+bash ./advanced/publish-reviewed-change.sh --message "Add CSI storage recovery exercise"
+flux create kustomization storage -n "$FluxNamespace" --source "GitRepository/$GitSource" --path ./advanced/storage --prune --interval 1m
+flux reconcile kustomization storage -n "$FluxNamespace" --with-source
 kubectl rollout status deployment/ledger -n storage-lab --timeout=600s
 kubectl get pvc -n storage-lab
 kubectl get pv -o wide
 kubectl exec -n storage-lab deployment/ledger -- sh -c 'printf "order-001,blue-widget\norder-002,green-widget\n" > /data/ledger.csv; sync; sha256sum /data/ledger.csv'
-$ExpectedHash = (kubectl exec -n storage-lab deployment/ledger -- sha256sum /data/ledger.csv).Split(' ')[0]
-$ExpectedHash | Set-Content .\.artifacts\advanced\ledger.sha256
+HashOutput=$(kubectl exec -n storage-lab deployment/ledger -- sha256sum /data/ledger.csv)
+ExpectedHash=${HashOutput%% *}
+printf '%s\n' "$ExpectedHash" > .artifacts/advanced/ledger.sha256
 ```
 
-Persist `storage` using lab 7's export-and-register recipe, substituting `storage`/`storage.yaml` for `teams`/`teams.yaml`. Add the exported CR to `gitops\clusters\primary\kustomization.yaml`'s explicit resource list and commit/reconcile the platform root. The namespace and StorageClass need platform ownership; do not grant those rights to `orders-reconciler`.
+Persist `storage` using lab 7's export-and-register recipe, substituting `storage`/`storage.yaml` for `teams`/`teams.yaml`. Add the exported CR to `gitops/clusters/primary/kustomization.yaml`'s explicit resource list and commit/reconcile the platform root. The namespace and StorageClass need platform ownership; do not grant those rights to `orders-reconciler`.
 
-Add `files.yaml` to `advanced\storage\kustomization.yaml`'s resources list, commit/push/reconcile `storage`. Dynamic private Files provisioning requires CSI identity permissions on the VNet/private DNS and allowed Azure control-plane egress. The core identity has network rights on the foundation VNet; if private DNS creation is denied, assign **Private DNS Zone Contributor on the required zone resource** and **Network Contributor on the subnet**, rather than opening storage to the internet. Inspect `kubectl describe pvc -n files-lab shared-files` and CSI controller logs for the exact failed resource.
+Add `files.yaml` to `advanced/storage/kustomization.yaml`'s resources list, render with `kubectl kustomize ./advanced/storage`, commit/push/reconcile `storage`. Dynamic private Files provisioning requires CSI identity permissions on the VNet/private DNS and allowed Azure control-plane egress. The core identity has network rights on the foundation VNet; if private DNS creation is denied, assign **Private DNS Zone Contributor on the required zone resource** and **Network Contributor on the subnet**, rather than opening storage to the internet. Inspect `kubectl describe pvc -n files-lab shared-files` and CSI controller logs for the exact failed resource.
 
-```powershell
+```bash
 kubectl rollout status deployment/files-reader -n files-lab --timeout=600s
-$Readers = (kubectl get pods -n files-lab -l app=files-reader -o json | ConvertFrom-Json).items.metadata.name
-kubectl exec -n files-lab $Readers[0] -- sh -c 'printf "shared-evidence\n" > /data/shared.txt; sync'
-kubectl exec -n files-lab $Readers[1] -- cat /data/shared.txt
+ReaderPods=$(kubectl get pods -n files-lab -l app=files-reader -o json)
+ReaderNames=$(jq -er '.items[].metadata.name' <<< "$ReaderPods")
+mapfile -t Readers <<< "$ReaderNames"
+(( ${#Readers[@]} >= 2 )) || { printf '%s\n' 'Expected two Files readers.' >&2; exit 1; }
+kubectl exec -n files-lab "${Readers[0]}" -- sh -c 'printf "shared-evidence\n" > /data/shared.txt; sync'
+kubectl exec -n files-lab "${Readers[1]}" -- cat /data/shared.txt
 ```
 
 Expected: both replicas read the same file. `ReadWriteOnce` is a **single-node** access mode, not a single-pod lock; `ReadWriteMany` supports multi-node writers but does not provide application locking. LRS Disk topology can bind to a zone; `WaitForFirstConsumer` avoids premature placement. `Delete` reclaim is deliberately dangerous and cheap for the synthetic exercise. Production may choose `Retain` with an explicit orphan-disk cleanup procedure.
 
-**Controlled break/fix:** suspend `storage`, set an impossible node selector on the disk deployment, and inspect scheduling:
+**Controlled break/fix:** suspend `storage`, set an impossible node selector on the disk deployment, and inspect scheduling. The subshell's recovery trap removes only the injected selector key before resuming/reconciling the owner; server-side apply may otherwise preserve an extra live key not owned by Flux:
 
-```powershell
-flux suspend kustomization storage -n $FluxNamespace
-kubectl patch deployment ledger -n storage-lab --type merge -p '{"spec":{"template":{"spec":{"nodeSelector":{"lab.example.com/absent":"true"}}}}}'
-kubectl get pods -n storage-lab
-kubectl describe pods -n storage-lab
+```bash
+(
+  set -euo pipefail
+  flux suspend kustomization storage -n "$FluxNamespace"
+  trap 'Status=$?; kubectl patch deployment ledger -n storage-lab --type merge -p "{\"spec\":{\"template\":{\"spec\":{\"nodeSelector\":{\"lab.example.com/absent\":null}}}}}" || Status=$?; flux resume kustomization storage -n "$FluxNamespace" || Status=$?; flux reconcile kustomization storage -n "$FluxNamespace" || Status=$?; exit "$Status"' EXIT
+  kubectl patch deployment ledger -n storage-lab --type merge -p '{"spec":{"template":{"spec":{"nodeSelector":{"lab.example.com/absent":"true"}}}}}'
+  kubectl get pods -n storage-lab
+  kubectl describe pods -n storage-lab
+)
 ```
 
-Expected Pending/FailedScheduling and selector mismatch, **not** "lost disk data." Repair by resuming the owner:
+Expected Pending/FailedScheduling and selector mismatch, **not** "lost disk data." The trap restores the owner after inspection. If interrupted by host loss or forced termination, run these explicit recovery commands first; then verify the rollout and data:
 
-```powershell
-flux resume kustomization storage -n $FluxNamespace
-flux reconcile kustomization storage -n $FluxNamespace
+```bash
+kubectl patch deployment ledger -n storage-lab --type merge -p '{"spec":{"template":{"spec":{"nodeSelector":{"lab.example.com/absent":null}}}}}'
+flux resume kustomization storage -n "$FluxNamespace"
+flux reconcile kustomization storage -n "$FluxNamespace"
 kubectl rollout status deployment/ledger -n storage-lab --timeout=600s
 kubectl exec -n storage-lab deployment/ledger -- sha256sum /data/ledger.csv
 ```
@@ -273,17 +310,17 @@ Review the helper before running: it creates private metadata storage/PE/DNS, a 
 <details>
 <summary>Solution</summary>
 
-```powershell
+```bash
 az extension add -n dataprotection --upgrade
 az extension add -n k8s-extension --upgrade
 az extension show -n dataprotection --query version
-.\advanced\Invoke-AksBackup.ps1 -Operation Configure
-az k8s-extension show -n azure-aks-backup --cluster-type managedClusters --cluster-name $Lab.ClusterName -g $Lab.ResourceGroup
+bash ./advanced/invoke-aks-backup.sh --operation Configure
+az k8s-extension show -n azure-aks-backup --cluster-type managedClusters --cluster-name "$(lab_value ClusterName)" -g "$(lab_value ResourceGroup)"
 kubectl get pods -n dataprotection-microsoft
-az aks trustedaccess rolebinding list -g $Lab.ResourceGroup --cluster-name $Lab.ClusterName
-$Instance = Get-Content .\.artifacts\advanced\backup-created.json -Raw | ConvertFrom-Json
-$Vault = "$($Lab.Prefix)-backup"
-az dataprotection backup-instance show -g $Lab.ResourceGroup --vault-name $Vault -n $Instance.name
+az aks trustedaccess rolebinding list -g "$(lab_value ResourceGroup)" --cluster-name "$(lab_value ClusterName)"
+Instance=$(< .artifacts/advanced/backup-created.json)
+Vault="$(lab_value Prefix)-backup"
+az dataprotection backup-instance show -g "$(lab_value ResourceGroup)" --vault-name "$Vault" -n "$(jq -er '.name' <<< "$Instance")"
 ```
 
 Wait for extension healthy and protection configured. If roles are newly assigned, allow propagation then repeat the helper's `validate-for-backup` and instance-create lines, not the entire provisioning sequence. A denied endpoint usually means missing private DNS or firewall egress; Microsoft documents required extension FQDNs in the backup concept article. Amend lab-3 firewall policy narrowly, retaining existing rules.
@@ -305,34 +342,39 @@ Restore to the same supported cluster/region with namespace mapping, volume data
 <details>
 <summary>Solution</summary>
 
-```powershell
-.\advanced\Invoke-AksBackup.ps1 -Operation Backup
-az dataprotection job list-from-resourcegraph --datasource-type AzureKubernetesService --datasource-id $Out.clusterId.value --operation OnDemandBackup -o json
-az dataprotection recovery-point list -g $Lab.ResourceGroup --vault-name $Vault --backup-instance-name $Instance.name -o json
+```bash
+bash ./advanced/invoke-aks-backup.sh --operation Backup
+az dataprotection job list-from-resourcegraph --datasource-type AzureKubernetesService --datasource-id "$(jq -er '.clusterId.value' <<< "$Out")" --operation OnDemandBackup -o json
+az dataprotection recovery-point list -g "$(lab_value ResourceGroup)" --vault-name "$Vault" --backup-instance-name "$(jq -er '.name' <<< "$Instance")" -o json
 ```
 
 **Stop until the specific backup job is Completed and its recovery point exists.** Save the job ID, timestamps and recovery-point name. Do not pick "latest" before the requested backup has finished. The job should include the Disk PVC and have no skipped/failed protected volume.
 
-```powershell
-$RecoveryPointId = Read-Host 'Verified completed operational recovery point name'
+```bash
+read -r -p 'Verified completed operational recovery point name: ' RecoveryPointId
+[[ -n "$RecoveryPointId" ]] || { printf '%s\n' 'A verified recovery point is required.' >&2; exit 1; }
 kubectl exec -n storage-lab deployment/ledger -- sh -c 'rm /data/ledger.csv; sync'
 # Controlled incident: source file is now absent.
-$PSNativeCommandUseErrorActionPreference = $false
-kubectl exec -n storage-lab deployment/ledger -- cat /data/ledger.csv
-$PSNativeCommandUseErrorActionPreference = $true
-.\advanced\Invoke-AksBackup.ps1 -Operation Restore -RecoveryPointId $RecoveryPointId
-az dataprotection job list-from-resourcegraph --datasource-type AzureKubernetesService --datasource-id $Out.clusterId.value --operation Restore -o json
+Status=0
+MissingFile=$(kubectl exec -n storage-lab deployment/ledger -- cat /data/ledger.csv 2>&1) || Status=$?
+printf '%s\n' "$MissingFile"
+[[ "$Status" != 0 ]] || { printf '%s\n' 'Expected the synthetic ledger to be absent.' >&2; exit 1; }
+grep -F 'No such file or directory' <<< "$MissingFile"
+bash ./advanced/invoke-aks-backup.sh --operation Restore --recovery-point-id "$RecoveryPointId"
+az dataprotection job list-from-resourcegraph --datasource-type AzureKubernetesService --datasource-id "$(jq -er '.clusterId.value' <<< "$Out")" --operation Restore -o json
 ```
 
 The request maps `storage-lab` to **storage-restored**, `RestoreWithVolumeData`, conflict policy Skip. Flux does not own the target namespace; do not add it to Git before restore. Target is the same supported cluster/region, so extension, Trusted Access and node capacity are already present. The helper updates restore roles and calls **validate-for-restore before triggering**.
 
 Wait for restore job Completed, then:
 
-```powershell
+```bash
 kubectl rollout status deployment/ledger -n storage-restored --timeout=600s
 kubectl get pvc -n storage-restored
-$ActualHash = (kubectl exec -n storage-restored deployment/ledger -- sha256sum /data/ledger.csv).Split(' ')[0]
-if ($ActualHash -ne (Get-Content .\.artifacts\advanced\ledger.sha256).Trim()) { throw 'Restored file integrity failed.' }
+HashOutput=$(kubectl exec -n storage-restored deployment/ledger -- sha256sum /data/ledger.csv)
+ActualHash=${HashOutput%% *}
+read -r ExpectedHash < .artifacts/advanced/ledger.sha256
+[[ "$ActualHash" == "$ExpectedHash" ]] || { printf '%s\n' 'Restored file integrity failed.' >&2; exit 1; }
 kubectl exec -n storage-restored deployment/ledger -- cat /data/ledger.csv
 ```
 
@@ -353,61 +395,69 @@ PITR creates a **new server**, not an in-place undo. Verify PE/DNS, roles, confi
 
 AKS Backup did not protect the managed database. First keep the order ID and expected item; enable `psql` access without storing a password:
 
-```powershell
-$env:PGHOST = $PgHost
-$env:PGUSER = $Admin.userPrincipalName
-$env:PGDATABASE = 'ordersdb'
-$env:PGSSLMODE = 'verify-full'
-$env:PGSSLROOTCERT = 'system'
-$env:PGPASSWORD = az account get-access-token --resource https://ossrdbms-aad.database.windows.net --query accessToken -o tsv
-try {
+```bash
+export PGHOST="$PgHost"
+export PGUSER="$(jq -er '.userPrincipalName' <<< "$Admin")"
+export PGDATABASE=ordersdb PGSSLMODE=verify-full PGSSLROOTCERT=system
+(
+  set -euo pipefail
+  trap 'unset PGPASSWORD' EXIT
+  PGPASSWORD=$(az account get-access-token --resource https://ossrdbms-aad.database.windows.net --query accessToken -o tsv)
+  export PGPASSWORD
   psql -X --set ON_ERROR_STOP=1 -c 'SELECT order_id,item,processed_at FROM processed_orders ORDER BY order_id;'
-  $RestoreTime = [DateTime]::UtcNow.ToString('yyyy-MM-ddTHH:mm:ssZ')
-  $RestoreTime | Set-Content .\.artifacts\advanced\postgres-restore-time.txt
-  Start-Sleep 60
+  date -u +%Y-%m-%dT%H:%M:%SZ > .artifacts/advanced/postgres-restore-time.txt
+  sleep 60
   # Synthetic-only incident: database deletion, not a deployment failure.
   psql -X --set ON_ERROR_STOP=1 -c 'DELETE FROM processed_orders;'
-} finally { Remove-Item Env:PGPASSWORD -ErrorAction SilentlyContinue }
+)
+read -r RestoreTime < .artifacts/advanced/postgres-restore-time.txt
 ```
 
 Stop new producers during the short incident; leave the live API on the original database until the evidence is captured. Wait until the server's restore window includes `$RestoreTime`:
 
-```powershell
-az postgres flexible-server show -g $Lab.ResourceGroup -n $Pg --query '{state:state,backup:backup}'
-az postgres flexible-server restore -g $Lab.ResourceGroup -n $PgRestore --source-server $PgOut.serverId.value --restore-time $RestoreTime
-$RestoredPg = az postgres flexible-server show -g $Lab.ResourceGroup -n $PgRestore -o json | ConvertFrom-Json
-az postgres flexible-server update -g $Lab.ResourceGroup -n $PgRestore --public-access Disabled
-.\advanced\New-PrivateEndpoint.ps1 -ResourceGroup $Lab.ResourceGroup -Location $Lab.Location `
-  -Name "$($Lab.Prefix)-pitr-pe" -ResourceId $RestoredPg.id -GroupId postgresqlServer `
-  -SubnetId $Out.endpointsSubnetId.value -VnetId $Out.vnetId.value -ZoneName privatelink.postgres.database.azure.com
-az postgres flexible-server microsoft-entra-admin create -g $Lab.ResourceGroup -s $PgRestore --object-id $Admin.id --display-name $Admin.userPrincipalName --type User
+```bash
+az postgres flexible-server show -g "$(lab_value ResourceGroup)" -n "$Pg" --query '{state:state,backup:backup}'
+az postgres flexible-server restore -g "$(lab_value ResourceGroup)" -n "$PgRestore" --source-server "$(jq -er '.serverId.value' <<< "$PgOut")" --restore-time "$RestoreTime"
+RestoredPg=$(az postgres flexible-server show -g "$(lab_value ResourceGroup)" -n "$PgRestore" -o json)
+az postgres flexible-server update -g "$(lab_value ResourceGroup)" -n "$PgRestore" --public-access Disabled
+bash ./advanced/new-private-endpoint.sh --resource-group "$(lab_value ResourceGroup)" --location "$(lab_value Location)" \
+  --name "$(lab_value Prefix)-pitr-pe" --resource-id "$(jq -er '.id' <<< "$RestoredPg")" --group-id postgresqlServer \
+  --subnet-id "$(jq -er '.endpointsSubnetId.value' <<< "$Out")" --vnet-id "$(jq -er '.vnetId.value' <<< "$Out")" --zone-name privatelink.postgres.database.azure.com
+az postgres flexible-server microsoft-entra-admin create -g "$(lab_value ResourceGroup)" -s "$PgRestore" --object-id "$(jq -er '.id' <<< "$Admin")" --display-name "$(jq -er '.userPrincipalName' <<< "$Admin")" --type User
 ```
 
 If the administrator already exists, inspect it rather than duplicating it. A restore creates a **new server**, not an in-place undo. PE, role assignments, DNS and server configuration need verification; do not assume restored SQL roles alone reproduce Azure control-plane settings.
 
-```powershell
-$env:PGHOST = $RestoredPg.fullyQualifiedDomainName
-$env:PGPASSWORD = az account get-access-token --resource https://ossrdbms-aad.database.windows.net --query accessToken -o tsv
-try {
+```bash
+export PGHOST="$(jq -er '.fullyQualifiedDomainName' <<< "$RestoredPg")"
+getent ahostsv4 "$PGHOST"
+(
+  set -euo pipefail
+  trap 'unset PGPASSWORD' EXIT
+  PGPASSWORD=$(az account get-access-token --resource https://ossrdbms-aad.database.windows.net --query accessToken -o tsv)
+  export PGPASSWORD
   psql -X --set ON_ERROR_STOP=1 -c 'SELECT order_id,item,processed_at FROM processed_orders ORDER BY order_id;'
-} finally { Remove-Item Env:PGPASSWORD -ErrorAction SilentlyContinue }
+)
 ```
 
 Expected durable order reappears with its original item. Record actual recovery duration and the gap between restored time and incident time. For this lab, **do not repoint production**: preserve original `$Pg` for lab 10. Re-submit the saved synthetic order through the application to repopulate the original server, then verify GET and SQL again. In a real cutover, fence all writers, compare records, update the authoritative Git endpoint and recycle connections; never run two independent writable databases unintentionally.
 
-```powershell
-$SavedOrder = Get-Content .\.artifacts\advanced\durable-order.json -Raw | ConvertFrom-Json
-Invoke-RestMethod "$AppUrl/orders" -Method Post -ContentType application/json -Body ($SavedOrder | ConvertTo-Json)
-.\advanced\Test-OrderLedger.ps1 -BaseUri $AppUrl -LedgerPath .\.artifacts\advanced\durable-order.json `
-  -ReportPath .\.artifacts\advanced\pitr-original-repopulated.json -TimeoutSeconds 180
-$env:PGHOST = $PgHost
-$env:PGPASSWORD = az account get-access-token --resource https://ossrdbms-aad.database.windows.net --query accessToken -o tsv
-try {
-@'
+```bash
+SavedOrder=$(< .artifacts/advanced/durable-order.json)
+curl --fail-with-body --silent --show-error "$AppUrl/orders" --header 'Content-Type: application/json' --data "$SavedOrder"
+bash ./advanced/test-order-ledger.sh --base-uri "$AppUrl" --ledger-path .artifacts/advanced/durable-order.json \
+  --report-path .artifacts/advanced/pitr-original-repopulated.json --timeout-seconds 180
+export PGHOST="$PgHost"
+(
+  set -euo pipefail
+  trap 'unset PGPASSWORD' EXIT
+  PGPASSWORD=$(az account get-access-token --resource https://ossrdbms-aad.database.windows.net --query accessToken -o tsv)
+  export PGPASSWORD
+  psql -X --set ON_ERROR_STOP=1 --set "order_id=$(jq -er '.id' <<< "$SavedOrder")" <<'SQL'
 SELECT order_id,item,count(*) AS copies FROM processed_orders
 WHERE order_id = :'order_id' GROUP BY order_id,item;
-'@ | psql -X --set ON_ERROR_STOP=1 --set "order_id=$($SavedOrder.id)"
-} finally { Remove-Item Env:PGPASSWORD -ErrorAction SilentlyContinue }
+SQL
+)
 ```
 
 The helper checks the ID **and item** with a bounded wait; the SQL result on `$PgHost` must contain one original row. The PITR copy demonstrates recovery, while this final check proves the still-authoritative server is ready for the cumulative labs.
@@ -431,16 +481,16 @@ Separate the evidence into three conclusions: desired resources can reconcile fr
 
 For this task, remove only the isolated recovery namespace and PITR server/endpoint:
 
-```powershell
+```bash
 kubectl delete namespace storage-restored
-az network private-endpoint delete -g $Lab.ResourceGroup -n "$($Lab.Prefix)-pitr-pe"
-az postgres flexible-server delete -g $Lab.ResourceGroup -n $PgRestore --yes
+az network private-endpoint delete -g "$(lab_value ResourceGroup)" -n "$(lab_value Prefix)-pitr-pe"
+az postgres flexible-server delete -g "$(lab_value ResourceGroup)" -n "$PgRestore" --yes
 ```
 
 At final end-of-pack teardown only, the instance-deletion command for the guarded sequence above is:
 
-```powershell
-az dataprotection backup-instance delete -g $Lab.ResourceGroup --vault-name $Vault -n $Instance.name --yes
+```bash
+az dataprotection backup-instance delete -g "$(lab_value ResourceGroup)" --vault-name "$Vault" -n "$(jq -er '.name' <<< "$Instance")" --yes
 ```
 
 </details>
