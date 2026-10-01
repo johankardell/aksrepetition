@@ -321,11 +321,15 @@ git pull --ff-only
 BadCommit=$(git rev-parse HEAD)
 ```
 
-Run this expected-failure reconciliation in a separate Bash invocation, then inspect in the original terminal:
+Capture the expected health-check failure without terminating the shared Bash session. Allow ten minutes for the CLI, longer than the child's five-minute health-check timeout, so the controller can report its failure. Require a current-generation health condition rather than treating any Flux connection error as the expected result:
 
 ```bash
-set -euo pipefail
-flux reconcile kustomization orders-test --with-source
+Status=0
+Reconciliation=$(flux reconcile kustomization orders-test --with-source --timeout=10m 2>&1) || Status=$?
+printf '%s\n' "$Reconciliation"
+[[ "$Status" != 0 ]] || { printf '%s\n' 'Expected the missing image to fail reconciliation health checks.' >&2; exit 1; }
+kubectl get kustomization orders-test -n flux-system -o json |
+  jq -e '. as $object | any(.status.conditions[]?; .type == "Ready" and .status == "False" and .reason == "HealthCheckFailed" and .observedGeneration == $object.metadata.generation)'
 ```
 
 ```bash

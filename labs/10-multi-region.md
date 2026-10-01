@@ -81,6 +81,8 @@ The orders DR workload uses the primary geo-replicated ACR and Service Bus, not 
 
 ```bash
 az aks get-versions -l "$(lab_value SecondaryLocation)" -o table
+az vm list-usage -l "$(lab_value SecondaryLocation)" -o table
+az vm list-skus -l "$(lab_value SecondaryLocation)" --size "$(lab_value VmSize)" --all -o table
 az postgres flexible-server list-skus -l "$(lab_value SecondaryLocation)" -o table
 Cluster=$(az aks show -g "$(lab_value ResourceGroup)" -n "$(lab_value ClusterName)" -o json)
 KubernetesVersion=$(jq -er '.kubernetesVersion' <<< "$Cluster")
@@ -90,7 +92,7 @@ SshPublicKey=$(cat "$PublicKeyPath")
 az group create -n "$SecondaryRg" -l "$(lab_value SecondaryLocation)"
 az deployment group create -g "$SecondaryRg" -n foundation -f ./infra/main.bicep \
   -p "prefix=$SecondaryPrefix" "location=$(lab_value SecondaryLocation)" "kubernetesVersion=$KubernetesVersion" \
-  "adminGroupObjectId=$AdminGroupId" "sshPublicKey=$SshPublicKey" networkPrefix=10.60
+  "adminGroupObjectId=$AdminGroupId" "sshPublicKey=$SshPublicKey" "vmSize=$(lab_value VmSize)" networkPrefix=10.60
 Secondary=$(az deployment group show -g "$SecondaryRg" -n foundation --query properties.outputs -o json)
 printf '%s\n' "$Secondary" > ./.artifacts/advanced/secondary-outputs.json
 az deployment group create -g "$SecondaryRg" -n private-endpoints -f ./infra/private-endpoints.bicep \

@@ -12,6 +12,8 @@ Use Azure CLI 2.83.0 or later, Linux Bash, `jq`, `curl`, `gh`, `kubectl`, and an
 
 Budget for two small system nodes and three storage-optimized user nodes for the duration of the exercise. `Standard_L8s_v3` is an example discovery candidate, not a promise of regional availability or the right production size. Use managed OS disks on a VM size that leaves local NVMe devices available to Azure Container Storage. The local-NVMe path is **ephemeral**: deleting, deallocating, reimaging, or replacing a node can destroy the data on that node.
 
+Approve regional prices, family/total vCPU quota for all five nodes, and a four-hour allocation window including teardown. No node-pool autoscaler is enabled. A command timeout or closed shell does not stop billing; inspect and clean up failed/partial allocations within that window.
+
 Use only synthetic messages. Do not expose RabbitMQ publicly. Do not delete or deallocate a local-NVMe node during the failure exercise. The cluster, Azure Container Storage extension, disks, and any optional Elastic SAN resources are billable until removed.
 
 Create an ignored disposable working folder for rendered manifests and evidence:
@@ -76,6 +78,17 @@ az aks get-versions --location "$Location" -o table
 az vm list-usage --location "$Location" -o table
 az vm list-skus --location "$Location" --size "$StorageVmSize" --all \
   --query "[].{name:name,zones:locationInfo[0].zones,capabilities:capabilities,restrictions:restrictions}" -o json
+read -r -p 'Exact supported Kubernetes version from get-versions: ' KubernetesVersion
+[[ "$KubernetesVersion" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] ||
+  { printf 'Supply an exact supported Kubernetes version.\n' >&2; exit 1; }
+GroupExists=$(az group exists --name "$ResourceGroup")
+if [[ "$GroupExists" != false ]]; then
+  printf 'Refusing to reuse an existing resource group; select a unique disposable name.\n' >&2
+  exit 1
+fi
+printf 'SubscriptionId=%q\nLocation=%q\nResourceGroup=%q\nClusterName=%q\nKubernetesVersion=%q\n' \
+  "$SubscriptionId" "$Location" "$ResourceGroup" "$ClusterName" "$KubernetesVersion" > "$Work/context.sh"
+date -u +%FT%TZ > "$Work/allocation-start.txt"
 ```
 
 In the SKU output, inspect `MaxDataDiskCount`, `MaxResourceVolumeMB`, `vCPUs`, restrictions, and zones. Confirm current Azure Container Storage regional availability in the reference linked at the end of the lab. A size with one local NVMe device can lose that device to an ephemeral OS disk; this lab explicitly requests managed OS disks.
@@ -88,6 +101,7 @@ az group create --name "$ResourceGroup" --location "$Location" \
 
 az aks create --resource-group "$ResourceGroup" --name "$ClusterName" \
   --location "$Location" --nodepool-name system \
+  --kubernetes-version "$KubernetesVersion" \
   --node-count 2 --node-vm-size "$SystemVmSize" \
   --node-osdisk-type Managed --generate-ssh-keys
 
@@ -100,6 +114,8 @@ kubectl get nodes -L agentpool,kubernetes.azure.com/mode,workload,storage,topolo
 ```
 
 Expected: two Ready `system` nodes and three Ready `storage` nodes. If three zones are available and required for the exercise, recreate the storage pool with an approved zonal design before deploying RabbitMQ. Do not infer zone resilience merely from a region supporting zones.
+
+Keep the original shell open. On interrupted-run re-entry, set `Work` to the printed folder, use `set -euo pipefail`, source `"$Work/context.sh"`, run `az account set --subscription "$SubscriptionId"`, and reconnect to this exact cluster. Inspect existing resources before continuing; do not rerun creation or overwrite the allocation record. If the deadline has expired, proceed to cleanup. If cluster creation never completed, skip Kubernetes cleanup and inventory the dedicated resource group directly.
 
 </details>
 
@@ -123,6 +139,7 @@ curl --fail-with-body --location --max-time 120 "$OperatorUri" --output "$Operat
 grep -nE 'image:|kind: CustomResourceDefinition|kind: ClusterRole' "$OperatorManifest"
 # Review the complete manifest and image references before applying.
 kubectl apply -f "$OperatorManifest"
+kubectl wait crd/rabbitmqclusters.rabbitmq.com --for=condition=Established --timeout=300s
 kubectl rollout status deployment/rabbitmq-cluster-operator -n rabbitmq-system --timeout=300s
 kubectl get crd rabbitmqclusters.rabbitmq.com
 kubectl get pods -n rabbitmq-system -o wide
@@ -202,26 +219,45 @@ kubectl get pvc,pv -n rabbitmq
 kubectl exec -n rabbitmq rabbit-disk-server-0 -- rabbitmq-diagnostics cluster_status
 BaselinePvcJson=$(kubectl get pvc -n rabbitmq -l app.kubernetes.io/name=rabbit-disk -o json)
 BaselinePvcNames=$(jq -er '.items | if length == 3 then .[].metadata.name else error("Expected three baseline PVCs") end' <<< "$BaselinePvcJson")
-mapfile -t BaselinePvcs <<< "$BaselinePvcNames"
+printf '%s\n' "$BaselinePvcNames" > "$Work/baseline-pvcs.txt"
 ```
 
 Expected: three server pods on three different `storage` nodes, three Bound PVCs, three PVs using the Azure Disk CSI provisioner, and all three RabbitMQ members in cluster status.
 
-Create a quorum queue through the local management CLI. Read credentials from the generated Secret without printing them:
+In a second terminal, check the same cluster context and keep a foreground, loopback-only management tunnel open:
+
+```bash
+kubectl config current-context
+kubectl port-forward -n rabbitmq service/rabbit-disk 15672:15672 --address 127.0.0.1
+```
+
+In the original terminal, create a quorum queue through the HTTP management API and publish exactly five synthetic messages. This avoids depending on the incompatible `rabbitmqadmin` v1/v2 command syntaxes. Read credentials from the generated Secret without printing them; the authorization header goes to curl over standard input, not its command-line arguments:
 
 ```bash
 # Do not enable shell tracing or record a terminal transcript around credentials.
 RabbitUser=$(kubectl get secret rabbit-disk-default-user -n rabbitmq -o jsonpath='{.data.username}' | base64 --decode)
 RabbitPassword=$(kubectl get secret rabbit-disk-default-user -n rabbitmq -o jsonpath='{.data.password}' | base64 --decode)
-
-kubectl exec -n rabbitmq rabbit-disk-server-0 -- rabbitmqadmin \
-  --username "$RabbitUser" --password "$RabbitPassword" \
-  declare queue name=lab-quorum durable=true arguments='{"x-queue-type":"quorum"}'
+RabbitAuth=$(printf '%s:%s' "$RabbitUser" "$RabbitPassword" | base64 -w 0)
+rabbit_api() {
+  printf 'header = "Authorization: Basic %s"\n' "$RabbitAuth" |
+    curl --config - --silent --show-error --fail-with-body --max-time 30 \
+      "http://127.0.0.1:15672$1" "${@:2}"
+}
+rabbit_api /api/queues/%2F/lab-quorum --request PUT \
+  --header 'Content-Type: application/json' \
+  --data '{"durable":true,"auto_delete":false,"arguments":{"x-queue-type":"quorum"}}'
+for Message in {1..5}; do
+  rabbit_api /api/exchanges/%2F/amq.default/publish --request PUT \
+    --header 'Content-Type: application/json' \
+    --data "{\"properties\":{\"delivery_mode\":2},\"routing_key\":\"lab-quorum\",\"payload\":\"synthetic-$Message\",\"payload_encoding\":\"string\"}" |
+    jq -e '.routed == true' > /dev/null ||
+    { printf 'Synthetic message not routed or publish failed.\n' >&2; exit 1; }
+done
 kubectl exec -n rabbitmq rabbit-disk-server-0 -- rabbitmqctl \
-  list_queues name type leader members_online messages
+  list_queues name type leader members online messages
 ```
 
-If the installed `rabbitmqadmin` syntax differs, use `rabbitmqadmin --help` from the pod and supply the same queue properties. Do not place credentials in a committed manifest.
+Require `lab-quorum` to be durable, of type quorum, with three members online and five messages. The bounded HTTP publishes prove routing and queue contents, not an AMQP publisher-confirm or throughput benchmark. Do not place credentials in a committed manifest. Stop the management tunnel with Ctrl+C before deleting the baseline.
 
 Measure Azure managed disks in the AKS node resource group:
 
@@ -243,7 +279,7 @@ The baseline count must be three. If unrelated PVC disks exist, identify the thr
 Clear local credential variables:
 
 ```bash
-unset RabbitUser RabbitPassword
+unset RabbitUser RabbitPassword RabbitAuth
 ```
 
 </details>
@@ -258,14 +294,21 @@ unset RabbitUser RabbitPassword
 Delete the custom resource, wait for its pods to disappear, and inspect PVC/PV cleanup:
 
 ```bash
-kubectl delete rabbitmqcluster rabbit-disk -n rabbitmq --wait=true
+mapfile -t BaselinePvcs < "$Work/baseline-pvcs.txt"
+NodeResourceGroup=$(az aks show -g "$ResourceGroup" -n "$ClusterName" --query nodeResourceGroup -o tsv)
+kubectl delete rabbitmqcluster rabbit-disk -n rabbitmq --ignore-not-found --wait=true --timeout=300s
+BaselinePods=$(kubectl get pod -n rabbitmq -l app.kubernetes.io/name=rabbit-disk -o name)
+if [[ -n "$BaselinePods" ]]; then
+  mapfile -t BaselinePodNames <<< "$BaselinePods"
+  kubectl wait -n rabbitmq "${BaselinePodNames[@]}" --for=delete --timeout=300s
+fi
 for Claim in "${BaselinePvcs[@]}"; do
-  if [[ -n "$Claim" ]]; then kubectl delete pvc "$Claim" -n rabbitmq --wait=true; fi
+  if [[ -n "$Claim" ]]; then kubectl delete pvc "$Claim" -n rabbitmq --ignore-not-found --wait=true --timeout=300s; fi
 done
 kubectl get pv
 ```
 
-StatefulSet claims can outlive their pods by design, which is why the three captured names are deleted explicitly. If any other claim remains, inspect its owner references and reclaim policy; do not delete unrelated PVs. Wait for Azure resource deletion:
+StatefulSet claims can outlive their pods by design, which is why the three captured names are persisted for interrupted-run recovery and deleted explicitly. Operator versions that delete claims automatically are also accepted by `--ignore-not-found`. If any other claim remains, inspect its owner references and reclaim policy; do not delete unrelated PVs. Wait for Azure resource deletion:
 
 ```bash
 Deadline=$((SECONDS + 600))
@@ -299,13 +342,15 @@ Enable Azure Container Storage and verify its components:
 
 ```bash
 az aks update --resource-group "$ResourceGroup" --name "$ClusterName" \
-  --enable-azure-container-storage ephemeralDisk
+  --enable-azure-container-storage ephemeralDisk --container-storage-version 2
 
 kubectl get deployments,pods -n kube-system | grep acstor
 kubectl get storageclass local-csi
 kubectl get csistoragecapacities.storage.k8s.io -n kube-system \
   -o 'custom-columns=NAME:.metadata.name,CLASS:.storageClassName,CAPACITY:.capacity,NODE:.nodeTopology.matchLabels.topology\.localdisk\.csi\.acstor\.io/node'
 ```
+
+Discover the actual installer/controller Deployments and local CSI DaemonSets in `kube-system`; require each `kubectl rollout status <kind>/<name> -n kube-system --timeout=300s` to succeed. Confirm extension major version 2, provisioner `localdisk.csi.acstor.io`, `WaitForFirstConsumer` binding, and at least 16 GiB of advertised local capacity on each of the three storage nodes before submitting RabbitMQ. Listing components alone is not readiness.
 
 Create the local-NVMe RabbitMQ resource. The operator does not expose PVC-template annotations directly, so use its StatefulSet override to add the Azure Container Storage acknowledgement to the generated claim template:
 
@@ -384,21 +429,30 @@ kubectl exec -n rabbitmq rabbit-local-server-0 -- rabbitmq-diagnostics cluster_s
 
 Expected: three pods on three distinct storage nodes, three Bound PVCs, three PVs using `localdisk.csi.acstor.io`, and a healthy three-member cluster.
 
-Repeat the queue creation from task 4 against `rabbit-local`, then measure Azure disks:
+In the second terminal, open the same loopback tunnel for `service/rabbit-local` instead of `service/rabbit-disk`. In the original terminal, re-entry must first restore the `rabbit_api` function from task 4. Create the same queue and five-message sample, then measure Azure disks:
 
 ```bash
 RabbitUser=$(kubectl get secret rabbit-local-default-user -n rabbitmq -o jsonpath='{.data.username}' | base64 --decode)
 RabbitPassword=$(kubectl get secret rabbit-local-default-user -n rabbitmq -o jsonpath='{.data.password}' | base64 --decode)
-kubectl exec -n rabbitmq rabbit-local-server-0 -- rabbitmqadmin \
-  --username "$RabbitUser" --password "$RabbitPassword" \
-  declare queue name=lab-quorum durable=true arguments='{"x-queue-type":"quorum"}'
+RabbitAuth=$(printf '%s:%s' "$RabbitUser" "$RabbitPassword" | base64 -w 0)
+rabbit_api /api/queues/%2F/lab-quorum --request PUT \
+  --header 'Content-Type: application/json' \
+  --data '{"durable":true,"auto_delete":false,"arguments":{"x-queue-type":"quorum"}}'
+for Message in {1..5}; do
+  rabbit_api /api/exchanges/%2F/amq.default/publish --request PUT \
+    --header 'Content-Type: application/json' \
+    --data "{\"properties\":{\"delivery_mode\":2},\"routing_key\":\"lab-quorum\",\"payload\":\"synthetic-$Message\",\"payload_encoding\":\"string\"}" |
+    jq -e '.routed == true' > /dev/null ||
+    { printf 'Synthetic message not routed or publish failed.\n' >&2; exit 1; }
+done
 kubectl exec -n rabbitmq rabbit-local-server-0 -- rabbitmqctl \
-  list_queues name type leader members_online messages
+  list_queues name type leader members online messages
 
+NodeResourceGroup=$(az aks show -g "$ResourceGroup" -n "$ClusterName" --query nodeResourceGroup -o tsv)
 LocalDiskCount=$(az disk list -g "$NodeResourceGroup" \
   --query "length([?starts_with(name, 'pvc-')])" -o tsv)
 printf 'RabbitMQ Azure managed disks: %s\n' "$LocalDiskCount"
-unset RabbitUser RabbitPassword
+unset RabbitUser RabbitPassword RabbitAuth
 if [[ "$LocalDiskCount" != 0 ]]; then
   printf 'Workload managed disks returned; inspect their PV handles.\n' >&2
   exit 1
@@ -433,9 +487,11 @@ sleep 20
 kubectl get pods -n rabbitmq -o wide
 kubectl get events -n rabbitmq --sort-by=.lastTimestamp | tail -n 30
 kubectl exec -n rabbitmq rabbit-local-server-0 -- rabbitmq-diagnostics cluster_status
+kubectl exec -n rabbitmq rabbit-local-server-0 -- rabbitmqctl \
+  list_queues name type leader members online messages
 ```
 
-Expected: the replacement ordinal is Pending because its existing local PV has node affinity for the cordoned node. The other two members remain a majority. The scheduler cannot move that PV's bytes to another node; `ReadWriteOnce` and local topology are constraints, not replication.
+Expected: the replacement ordinal is Pending because its existing local PV has node affinity for the cordoned node. Require two online queue replicas and the five synthetic messages, not just two running cluster members. The scheduler cannot move that PV's bytes to another node; `ReadWriteOnce` and local topology are constraints, not replication. If diagnostics fail, still run the recovery block below to uncordon this exact node before investigating further or tearing down.
 
 Recover by making the original node schedulable:
 
@@ -444,7 +500,7 @@ kubectl uncordon "$TestNode"
 kubectl wait "pod/$TestPod" -n rabbitmq --for=condition=Ready --timeout=600s
 kubectl exec -n rabbitmq rabbit-local-server-0 -- rabbitmq-diagnostics cluster_status
 kubectl exec -n rabbitmq rabbit-local-server-0 -- rabbitmqctl \
-  list_queues name type leader members_online messages
+  list_queues name type leader members online messages
 ```
 
 All three members and all quorum-queue replicas must return. If the node itself was lost, this procedure would not restore its local data; RabbitMQ-specific member replacement and replica-repair procedures would be required while a majority still exists.
@@ -516,14 +572,13 @@ No. Storage-optimized VMs include local capacity in the VM price and may be more
 
 ## Cleanup
 
-Delete the RabbitMQ resource and namespace first, verify claims are gone, then delete the dedicated resource group. If you created Elastic SAN resources, inspect their volumes, snapshots, private endpoints, and retention requirements before deletion.
+Stop the management tunnel with Ctrl+C. Delete the RabbitMQ namespace (including either baseline or local resources) first, verify claims are gone, then delete the dedicated resource group. If you created Elastic SAN resources, inspect their volumes, snapshots, private endpoints, and retention requirements before deletion.
 
 <details>
 <summary>Solution: complete teardown</summary>
 
 ```bash
-kubectl delete rabbitmqcluster rabbit-local -n rabbitmq --ignore-not-found --wait=true
-kubectl delete namespace rabbitmq --ignore-not-found --wait=true
+kubectl delete namespace rabbitmq --ignore-not-found --wait=true --timeout=300s
 kubectl get pv
 az resource list --resource-group "$ResourceGroup" -o table
 ```
@@ -558,5 +613,6 @@ Sources reviewed 2026-09-23:
 - [RabbitMQ Cluster Operator installation](https://www.rabbitmq.com/kubernetes/operator/install-operator)
 - [RabbitMQ Cluster Operator configuration](https://www.rabbitmq.com/kubernetes/operator/using-operator)
 - [RabbitMQ quorum queues](https://www.rabbitmq.com/docs/quorum-queues)
+- [RabbitMQ HTTP management API](https://www.rabbitmq.com/docs/http-api-reference)
 - [Kubernetes persistent volumes](https://kubernetes.io/docs/concepts/storage/persistent-volumes/)
 - [Kubernetes pod anti-affinity and node affinity](https://kubernetes.io/docs/concepts/scheduling-eviction/assign-pod-node/)

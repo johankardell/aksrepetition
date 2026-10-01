@@ -12,7 +12,7 @@ _use_lab_error() {
 }
 
 _use_lab_load() {
-    local script_path root lab outputs name value account subscription_id tenant_id resource_group deployments
+    local script_path root lab outputs name value account subscription_id tenant_id resource_group deployments deployment deployment_state
     if [[ -n ${ZSH_VERSION:-} ]]; then
         # Keep Zsh's caller-specific options out of the loader without changing them.
         emulate -L zsh
@@ -58,12 +58,37 @@ _use_lab_load() {
     deployments=$(az deployment group list -g "$resource_group" --query '[].name' -o json) || return
     outputs='{}'
     if jq -e 'index("foundation") != null' <<<"$deployments" >/dev/null; then
-        outputs=$(az deployment group show -g "$resource_group" -n foundation --query properties.outputs -o json) ||
+        deployment=$(az deployment group show -g "$resource_group" -n foundation \
+            --query '{provisioningState:properties.provisioningState,outputs:properties.outputs}' -o json) ||
             return
-        lab=$(jq --argjson outputs "$outputs" '. + {
-            AcrName: $outputs.acrName.value, RegistryServer: $outputs.registryServer.value,
-            KeyVaultName: $outputs.keyVaultName.value, ServiceBusName: $outputs.serviceBusName.value
-        }' <<<"$lab") || return
+        deployment=$(jq -ce 'select(type == "object"
+            and (.provisioningState | type == "string" and length > 0)
+            and ((.outputs | type) == "object" or .outputs == null))' <<<"$deployment") ||
+            _use_lab_error 'Foundation deployment metadata is empty or invalid; inspect the Azure deployment response.' || return
+        deployment_state=$(jq -er '.provisioningState' <<<"$deployment") || return
+        outputs=$(jq -c '.outputs // {}' <<<"$deployment") || return
+        if [[ $outputs == '{}' ]]; then
+            case $deployment_state in
+                Failed|Canceled)
+                    printf 'Foundation deployment is %s and has no outputs. Loaded bootstrap settings only; inspect the failure before retrying deployment.\n' \
+                        "$deployment_state" >&2
+                    ;;
+                Succeeded)
+                    _use_lab_error 'Foundation deployment succeeded but has no outputs; verify it used infra/main.bicep.' || return
+                    ;;
+                *)
+                    _use_lab_error "Foundation deployment is $deployment_state and has no outputs; wait for it to finish before continuing." || return
+                    ;;
+            esac
+        else
+            jq -e '. as $outputs | all(["acrName", "registryServer", "keyVaultName", "serviceBusName"][];
+                . as $key | $outputs[$key].value | type == "string" and length > 0)' <<<"$outputs" >/dev/null ||
+                _use_lab_error 'Foundation outputs are incomplete or invalid; inspect the deployment before continuing.' || return
+            lab=$(jq --argjson outputs "$outputs" '. + {
+                AcrName: $outputs.acrName.value, RegistryServer: $outputs.registryServer.value,
+                KeyVaultName: $outputs.keyVaultName.value, ServiceBusName: $outputs.serviceBusName.value
+            }' <<<"$lab") || return
+        fi
     fi
 
     Root=$root

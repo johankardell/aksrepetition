@@ -124,13 +124,15 @@ az role assignment create --assignee-object-id "$TeamAGroupObjectId" --assignee-
   --role 'Azure Kubernetes Service RBAC Writer' --scope "$ClusterId/namespaces/team-a"
 ```
 
-An actual team-A member signs in on a **separate authorized management session**, gets non-admin AKS credentials and runs:
+An actual team-A member signs in on a **separate authorized management session**, gets non-admin AKS credentials and runs. Read only local settings here: `use-lab.sh` reads foundation deployment outputs, which this least-privilege team member is deliberately not authorized to retrieve. The cluster name below is the documented fixed foundation name, not a generated service suffix:
 
 ```bash
 set -euo pipefail
-source ./scripts/use-lab.sh
-az login --tenant "$(lab_value TenantId)"
-az aks get-credentials -g "$(lab_value ResourceGroup)" -n "$(lab_value ClusterName)" --overwrite-existing
+settings=$(jq -e . ./local.settings.json)
+az login --tenant "$(jq -er .TenantId <<< "$settings")"
+az account set --subscription "$(jq -er .SubscriptionId <<< "$settings")"
+az aks get-credentials -g "$(jq -er .ResourceGroup <<< "$settings")" \
+  -n "$(jq -er '.Prefix + "-aks"' <<< "$settings")" --overwrite-existing
 kubelogin convert-kubeconfig -l azurecli
 kubectl auth can-i create deployments -n team-a
 ```

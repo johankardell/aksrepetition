@@ -92,16 +92,16 @@ JSON
 fi
 ```
 
-Edit the configuration before running the following block. Use an owned private application FQDN for `Hostname`; select an approved secondary region distinct from `Location` for lab 10. Discover a supported regional Kubernetes patch using the lab 1 preflight commands.
+Edit the configuration before running the following block. Choose a private lab FQDN for `Hostname` (for example `orders.aks-lab.test`); lab 3 uses private DNS and a locally trusted self-signed certificate, so public domain ownership is not required. Lab 10 separately requires two owned origin names and public-CA certificates. Select an approved secondary region distinct from `Location` for lab 10. Discover a supported regional Kubernetes patch using the lab 1 preflight commands.
 
 ```bash
 # Edit all REPLACE values, choose regions and a unique 4-12 character lowercase prefix.
 settings=$(jq -e . ./local.settings.json)
 az login --tenant "$(jq -er .TenantId <<<"$settings")"
 az account set --subscription "$(jq -er .SubscriptionId <<<"$settings")"
-az aks get-versions --location swedencentral -o table
-az vm list-usage --location swedencentral -o table
-az vm list-skus --location swedencentral --size Standard_D4ds_v5 --all -o table
+az aks get-versions --location "$(jq -er .Location <<<"$settings")" -o table
+az vm list-usage --location "$(jq -er .Location <<<"$settings")" -o table
+az vm list-skus --location "$(jq -er .Location <<<"$settings")" --size "$(jq -er .VmSize <<<"$settings")" --all -o table
 # Select a supported GA patch with a supported upgrade path for lab 9; save it in settings.
 az group create --name "$(jq -er .ResourceGroup <<<"$settings")" --location "$(jq -er .Location <<<"$settings")" \
   --tags purpose=aks-enterprise-refresher environment=lab

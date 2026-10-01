@@ -56,6 +56,12 @@ elif args[:3] == ["deployment", "group", "list"]:
 elif args[:3] == ["deployment", "group", "show"]:
     if args[args.index("-n") + 1] == "delivery":
         print('{"testApiClientId":{"value":"test-api-client"},"testWorkerClientId":{"value":"test-worker-client"}}')
+    elif args[args.index("--query") + 1] == "{provisioningState:properties.provisioningState,outputs:properties.outputs}":
+        if "TEST_FOUNDATION_RESPONSE" in os.environ:
+            sys.stdout.write(os.environ["TEST_FOUNDATION_RESPONSE"])
+        else:
+            print(json.dumps({"provisioningState": os.environ.get("TEST_FOUNDATION_STATE", "Succeeded"),
+                              "outputs": json.loads((root / "outputs.json").read_text())}))
     else:
         print((root / "outputs.json").read_text())
 elif args[:2] == ["acr", "login"]:
@@ -187,6 +193,56 @@ print("offline render")
         self.run_script("scripts/use-lab.sh", success=False)
         self.assertFalse((self.root / "az-calls.jsonl").exists())
 
+    def test_failed_foundation_without_outputs_keeps_bootstrap_context(self):
+        for state, outputs in (("Failed", None), ("Canceled", {})):
+            with self.subTest(state=state, outputs=outputs):
+                self.env["TEST_FOUNDATION_STATE"] = state
+                (self.root / "outputs.json").write_text(json.dumps(outputs))
+                result = subprocess.run(
+                    [self.shell, "-c", 'source scripts/use-lab.sh || exit; lab_value ClusterName; printf "%s\\n" "$Outputs"; lab_value AcrName'],
+                    cwd=self.root, env=self.env, text=True, capture_output=True)
+                self.assertNotEqual(result.returncode, 0)
+                self.assertEqual(result.stdout.splitlines()[:2], ["testlab-aks", "{}"])
+                self.assertIn(f"Foundation deployment is {state} and has no outputs", result.stderr)
+                self.assertNotIn("--argjson", result.stderr)
+
+    def test_retry_failed_foundation_preserves_apply_confirmation(self):
+        self.env["TEST_FOUNDATION_STATE"] = "Failed"
+        (self.root / "outputs.json").write_text("null")
+        keys = self.root / "rendered/keys"
+        keys.mkdir(parents=True)
+        (keys / "aks.pub").write_text("ssh-rsa synthetic-public-key\n")
+        self.run_script("scripts/deploy-foundation.sh", "--apply", "--confirm", input="wrong-rg\n", success=False)
+        calls = [json.loads(line) for line in (self.root / "az-calls.jsonl").read_text().splitlines()]
+        self.assertFalse(any(call[:3] == ["deployment", "group", "create"] for call in calls))
+        self.run_script("scripts/deploy-foundation.sh", "--apply", "--confirm", input="test-rg\n")
+        calls = [json.loads(line) for line in (self.root / "az-calls.jsonl").read_text().splitlines()]
+        self.assertEqual(sum(call[:3] == ["deployment", "group", "what-if"] for call in calls), 2)
+        self.assertEqual(sum(call[:3] == ["deployment", "group", "create"] for call in calls), 1)
+
+    def test_invalid_or_unfinished_foundation_stops_before_deployment(self):
+        keys = self.root / "rendered/keys"
+        keys.mkdir(parents=True)
+        (keys / "aks.pub").write_text("ssh-rsa synthetic-public-key\n")
+        responses = [
+            "", "not-json", "null", "[]",
+            json.dumps({"provisioningState": "Succeeded", "outputs": None}),
+            json.dumps({"provisioningState": "Running", "outputs": None}),
+            json.dumps({"provisioningState": "Accepted", "outputs": {}}),
+            json.dumps({"provisioningState": "Succeeded", "outputs": []}),
+            json.dumps({"provisioningState": "Succeeded", "outputs": {"acrName": {"value": "partial"}}}),
+        ]
+        for response in responses:
+            with self.subTest(response=response):
+                self.env["TEST_FOUNDATION_RESPONSE"] = response
+                result = self.run_script("scripts/deploy-foundation.sh", "--apply", "--confirm",
+                                         input="test-rg\n", success=False)
+                self.assertIn("Foundation", result.stderr)
+                self.assertNotIn("invalid JSON text passed to --argjson", result.stderr)
+        calls = [json.loads(line) for line in (self.root / "az-calls.jsonl").read_text().splitlines()]
+        self.assertFalse(any(call[:3] in (["deployment", "group", "what-if"],
+                                         ["deployment", "group", "create"]) for call in calls))
+
     def test_context_without_foundation_and_native_failures(self):
         self.env["TEST_NO_FOUNDATION"] = "1"
         result = subprocess.run(
@@ -247,6 +303,21 @@ with (pathlib.Path(os.environ["TEST_ROOT"]) / "mirror-calls.jsonl").open("a") as
         query = "Usage | where TimeGenerated > ago(24h)"
         result = self.run_script("ops/invoke-logs-query.sh", "--query", query)
         self.assertEqual(json.loads(result.stdout), {"query": query, "timespan": "PT1H"})
+
+    def test_log_query_preserves_explicit_and_default_timespans(self):
+        query = "Usage | where TimeGenerated > ago(24h)"
+        for options, expected in (((), "PT1H"), (("--timespan", "P1D"), "P1D"),
+                                  (("--timespan", "PT30M"), "PT30M")):
+            with self.subTest(options=options):
+                result = self.run_script("ops/invoke-logs-query.sh", "--query", query, *options)
+                self.assertEqual(json.loads(result.stdout), {"query": query, "timespan": expected})
+
+    def test_invalid_log_query_timespans_fail_before_azure(self):
+        for duration in ("", "P0D", "PT0H", "P-1D", "24h", "P1D; echo unsafe"):
+            with self.subTest(duration=duration):
+                self.run_script("ops/invoke-logs-query.sh", "--query", "Usage",
+                                "--timespan", duration, success=False)
+        self.assertFalse((self.root / "az-calls.jsonl").exists())
 
     def test_render_and_one_shot_gitops_adoption(self):
         self.run_script("scripts/render-manifests.sh")

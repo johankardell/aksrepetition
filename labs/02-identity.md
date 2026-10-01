@@ -78,13 +78,18 @@ workerPod=$(kubectl get pods -n orders -l app=order-worker -o jsonpath='{.items[
 check="from azure.identity import DefaultAzureCredential; from azure.keyvault.secrets import SecretClient; SecretClient('https://$(lab_value KeyVaultName).vault.azure.net', DefaultAzureCredential()).get_secret('lab-version')"
 ```
 
-Run the following expected-failure command separately, then inspect the output:
+Capture the expected failure without disabling Bash strict mode, and require Key Vault authorization evidence:
 
 ```bash
-kubectl exec -n orders "$workerPod" -- python -c "$check"
+Status=0
+Denial=$(kubectl exec -n orders "$workerPod" -- python -c "$check" 2>&1) || Status=$?
+printf '%s\n' "$Denial"
+[[ "$Status" != 0 ]] || { printf '%s\n' 'Unexpected worker access to Key Vault.' >&2; exit 1; }
+grep -F 'azure.core.exceptions.HttpResponseError' <<< "$Denial"
+grep -Ei 'Forbidden|Status: 403|Status code: 403' <<< "$Denial"
 ```
 
-Expected: **403 Forbidden**, not successful secret access. Bash strict mode stops the current invocation on a failed command; run this expected failure in a separate Bash invocation, then resume in the original context. A token acquisition error indicates federation/authentication trouble, while a network timeout is not proof of an RBAC denial.
+Expected: a Key Vault **403 Forbidden**, not successful secret access. The guarded command preserves the current session on the expected denial; its evidence checks still fail on an unexpected result. A token acquisition error indicates federation/authentication trouble, while a network timeout is not proof of an RBAC denial.
 
 </details>
 

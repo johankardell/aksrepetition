@@ -159,10 +159,12 @@ source ./scripts/use-lab.sh
 read -r -p 'Lab 3 HTTPS application base URL: ' AppUrl
 AppUrl=${AppUrl%/}
 [[ "$AppUrl" == https://* ]] || { printf '%s\n' 'Use the trusted HTTPS application URL.' >&2; exit 1; }
+[[ -r "$Root/rendered/certs/lab-ca-bundle.pem" ]] || { printf '%s\n' 'Restore the approved lab-3 CA bundle on this host first.' >&2; exit 1; }
+export SSL_CERT_FILE="$Root/rendered/certs/lab-ca-bundle.pem" CURL_CA_BUNDLE="$Root/rendered/certs/lab-ca-bundle.pem"
 bash ./advanced/measure-orders.sh --base-uri "$AppUrl" --seconds 3600 --output-path .artifacts/advanced/upgrade-traffic.json
 ```
 
-The helper measures readiness HTTP status and latency once per second. It is **not** a full order SLI. In addition, create a synthetic order immediately before and after each operation and check GET plus worker/database evidence as in lab 8. Record retry outcomes separately; retrying should not hide failed requests in the SLI. Agree the lab objective first, for example ≥99% successful probes and no loss of accepted test orders; use the customer's actual SLO for a real change.
+The helper measures sequential readiness HTTP status and latency, waiting one second after each probe; slow requests or the ten-second request timeout reduce the sampling frequency. It is **not** a full order SLI. In addition, create a synthetic order immediately before and after each operation and check GET plus worker/database evidence as in lab 8. Record retry outcomes separately; retrying should not hide failed requests in the SLI. Agree the lab objective first, for example ≥99% successful probes and no loss of accepted test orders; use the customer's actual SLO for a real change.
 
 In terminal B, save your target and start the supported control-plane upgrade, then node pools one at a time:
 
@@ -223,23 +225,27 @@ If the version upgrade already installed the newest node image, image-only may b
 
 Update the authoritative foundation **deployment parameters** to `$Target` and pool maintenance settings before future IaC deployment. Do not reapply an old version from lab 1. Revisit pinned PSA minor labels in team Git configuration only after testing new requirements. Preserve SHA and version/image evidence.
 
-When terminal A finishes:
+After the last maintenance operation, record the change end in terminal B. When terminal A finishes, calculate availability over its actual sample population and report that population's timestamps separately from the change window:
 
 ```bash
+date -u +%Y-%m-%dT%H:%M:%SZ > .artifacts/advanced/upgrade-end.txt
+# Wait for terminal A to finish writing its evidence before the following commands.
 Samples=$(< .artifacts/advanced/upgrade-traffic.json)
 jq -e 'type == "array" and length > 0' <<< "$Samples" > /dev/null || {
   printf '%s\n' 'No traffic sample array was recorded; availability cannot be calculated.' >&2; exit 1;
 }
 read -r ChangeStart < .artifacts/advanced/upgrade-start.txt
-jq --arg start "$ChangeStart" --arg end "$(date -u +%Y-%m-%dT%H:%M:%SZ)" '
+read -r ChangeEnd < .artifacts/advanced/upgrade-end.txt
+jq --arg changeStart "$ChangeStart" --arg changeEnd "$ChangeEnd" '
   length as $count | (map(select(.status != 200)) | length) as $failed |
   {Samples:$count, Failed:$failed,
    AvailabilityPercent:((100 * ($count - $failed) / $count * 1000 | round) / 1000),
-   Start:$start, End:$end}' <<< "$Samples"
+   Start:.[0].utc, End:.[-1].utc,
+   ChangeStart:$changeStart, ChangeEnd:$changeEnd}' <<< "$Samples"
 jq '[.[] | select(.status != 200)]' <<< "$Samples"
 ```
 
-Correlate failed/slow samples with node drain timestamps, ingress endpoints, order retries and queue age. Report readiness and order SLI separately. Investigate all missing IDs against PostgreSQL and Service Bus active/dead-letter counts.
+This summary covers the entire probe run, including baseline/recovery observations; it is not an isolated maintenance-only percentage. Verify that probing covered every operation. If the one-hour run ended before maintenance did, record the uncovered interval as incomplete rather than claiming whole-change availability. Correlate failed/slow samples with node drain timestamps, ingress endpoints, order retries and queue age. Report readiness and order SLI separately. Investigate all missing IDs against PostgreSQL and Service Bus active/dead-letter counts.
 
 For example, 10 failed observations out of 1,000 means 99% sampled readiness availability; it says nothing by itself about the durability of accepted orders. This is an illustrative calculation, not a measured lab result. Pair the actual sample count and time range with accepted/processed/missing order IDs, latency and retries, and compare against the objective agreed before the change.
 

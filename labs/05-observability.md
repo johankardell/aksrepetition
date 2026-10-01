@@ -203,8 +203,9 @@ Open the authenticated Grafana endpoint printed in directive 3. In **Explore**, 
 
 ```bash
 AvailabilityQuery=$(cat <<'EOF'
-1 - (sum(rate(orders_http_requests_total{namespace="orders",status=~"5.."}[5m])) or vector(0))
-    / clamp_min(sum(rate(orders_http_requests_total{namespace="orders"}[5m])), 0.001)
+(1 - (sum(rate(orders_http_requests_total{namespace="orders",status=~"5.."}[5m])) or vector(0))
+    / clamp_min(sum(rate(orders_http_requests_total{namespace="orders"}[5m])), 0.001))
+    and on() (sum(rate(orders_http_requests_total{namespace="orders"}[5m])) > 0)
 EOF
 )
 LatencyQuery=$(cat <<'EOF'
@@ -217,7 +218,7 @@ az monitor metrics list --resource "$(output_value serviceBusId)" \
   --filter "EntityName eq 'orders'" -o json
 ```
 
-**Evidence:** no result means “no series,” not 100% availability. With no failures, the `or vector(0)` branch avoids an empty error numerator. The alert uses 5xx ratio, p95 and a separate missing-metrics rule; action-group email requires a **real firing condition**, not merely a deployed rule. The availability query sees only requests reaching the API. A gateway outage or no Ready endpoints may never increment it. Test the real Lab 3 HTTPS URL from the consumer network with `invoke-order-load.sh` and compare its measured availability/p95 to the port-forward baseline; trust the external measurement for user impact. Do not disable TLS certificate verification.
+**Evidence:** no result means missing series or no measured requests, not 100% availability. With traffic but no failures, the `or vector(0)` branch avoids an empty error numerator; the positive-request-rate gate excludes idle windows. The alert uses 5xx ratio, p95 and a separate missing-metrics rule; action-group email requires a **real firing condition**, not merely a deployed rule. The availability query sees only requests reaching the API. A gateway outage or no Ready endpoints may never increment it. Test the real Lab 3 HTTPS URL from the consumer network with `invoke-order-load.sh` and compare its measured availability/p95 to the port-forward baseline; trust the external measurement for user impact. Do not disable TLS certificate verification.
 
 Use Grafana Editor only if you need to save a dashboard; Viewer can query but cannot author. Ask the platform operator for a scoped role, not global admin. In Azure Monitor Alerts, record rule name, fired/resolved UTC time, affected SLI, and received email. For a production SLO, add gateway/external-probe telemetry and multi-window error-budget burn rules; these five-minute lab thresholds are deliberately simpler.
 
@@ -380,10 +381,12 @@ Usage
 | order by IngestedMB desc
 EOF
 )
-bash ./ops/invoke-logs-query.sh --query "$Query"
+bash ./ops/invoke-logs-query.sh --query "$Query" --timespan P1D
 ```
 
 **Evidence:** log-agent configuration has no parse errors; `KubeMonAgentEvents` reports accepted config after its reporting interval. This ConfigMap is for **Standard** clusters; Automatic with managed system node pools has different support. We exclude kube-system/gatekeeper stdout/stderr and disable environment-variable collection; that does not disable selected control-plane audit diagnostics. Review the security/incident trade-off before excluding logs.
+
+`invoke-logs-query.sh` defaults to the last hour (`PT1H`). The `Usage` query explicitly requests `--timespan P1D` so the API does not silently narrow its 24-hour KQL window. Match the API timespan to the intended query/evidence interval.
 
 For ongoing operation change **both** `OTEL_TRACES_SAMPLER_ARG` values in the Git-owned `telemetry-patch.yaml` from `"1.0"` to `"0.1"` through a PR, merge and reconcile. Keep 100% while proving cross-service traces. Sampling is not applied to the Prometheus SLIs. Inspect `ItemCount` in Application Insights tables; don't infer actual sampling from manifest text alone. Never put order IDs, emails or raw URLs in metric labels; current labels have bounded method/status cardinality.
 

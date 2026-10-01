@@ -12,6 +12,8 @@ Use a dedicated subscription or resource group, Azure CLI, Linux Bash, `jq`, and
 
 Budget for two system nodes, one ordinary user node, and one confidential user node during the active exercise. Confidential VM availability and price vary by region and agreement. The lab uses Linux; Windows, Intel TDX, FIPS, ARM64, Trusted Launch, pod sandboxing, confidential containers, and node auto-provisioning are not combined with the CVM pool.
 
+Approve regional prices, family/total vCPU quota for all four nodes, and a four-hour allocation window including teardown. The confidential autoscaler is bounded to zero through one node; ordinary and system pools do not autoscale. A timeout or closed shell does not stop billing; inspect and clean up failed/partial allocations within that window.
+
 Use only synthetic data. A CVM node pool protects VM memory and state from the hypervisor and host management code, but **all pods on a CVM node share that node-level trust boundary**. This exercise does not claim per-pod isolation from the node administrator, validate application attestation, or establish regulatory compliance.
 
 Create an ignored disposable folder for manifests and evidence:
@@ -69,6 +71,17 @@ az aks get-versions --location "$Location" -o table
 az vm list-usage --location "$Location" -o table
 az vm list-skus --location "$Location" --size "$ConfidentialVmSize" --all \
   --query "[].{name:name,zones:locationInfo[0].zones,restrictions:restrictions,capabilities:capabilities}" -o json
+read -r -p 'Exact supported Kubernetes version from get-versions: ' KubernetesVersion
+[[ "$KubernetesVersion" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] ||
+  { printf 'Supply an exact supported Kubernetes version.\n' >&2; exit 1; }
+GroupExists=$(az group exists --name "$ResourceGroup")
+if [[ "$GroupExists" != false ]]; then
+  printf 'Refusing to reuse an existing resource group; select a unique disposable name.\n' >&2
+  exit 1
+fi
+printf 'SubscriptionId=%q\nLocation=%q\nResourceGroup=%q\nClusterName=%q\nKubernetesVersion=%q\n' \
+  "$SubscriptionId" "$Location" "$ResourceGroup" "$ClusterName" "$KubernetesVersion" > "$Work/context.sh"
+date -u +%FT%TZ > "$Work/allocation-start.txt"
 ```
 
 Confirm the size is an AKS-supported AMD confidential VM SKU and has no subscription or regional restriction. Intel TDX confidential VMs are not currently supported for AKS node pools.
@@ -81,8 +94,9 @@ az group create --name "$ResourceGroup" --location "$Location" \
 
 az aks create --resource-group "$ResourceGroup" --name "$ClusterName" \
   --location "$Location" --nodepool-name system \
+  --kubernetes-version "$KubernetesVersion" \
   --node-count 2 --node-vm-size "$SystemVmSize" \
-  --node-taints CriticalAddonsOnly=true:NoSchedule \
+  --nodepool-taints CriticalAddonsOnly=true:NoSchedule \
   --generate-ssh-keys
 
 az aks nodepool add --resource-group "$ResourceGroup" --cluster-name "$ClusterName" \
@@ -94,6 +108,8 @@ kubectl get nodes -L agentpool,kubernetes.azure.com/mode,workload-tier
 ```
 
 Expected: two tainted system nodes and one ordinary user node. The system taint prevents application pods without a matching toleration from consuming the system pool.
+
+Keep the original shell open. On interrupted-run re-entry, set `Work` to the printed folder, use `set -euo pipefail`, source `"$Work/context.sh"`, run `az account set --subscription "$SubscriptionId"`, and reconnect to this exact cluster. Restore `MixedManifest="$Work/mixed-workloads.yaml"` if task 4 completed. Inspect existing resources before continuing; do not rerun creation or overwrite the allocation record. If the deadline has expired, proceed to cleanup. If cluster creation never completed, skip Kubernetes cleanup and inventory the dedicated resource group directly.
 
 </details>
 
@@ -114,7 +130,7 @@ az aks nodepool add --resource-group "$ResourceGroup" --cluster-name "$ClusterNa
   --os-type Linux --os-sku AzureLinux \
   --labels workload-tier=confidential \
   --node-taints workload-tier=confidential:NoSchedule \
-  --enable-cluster-autoscaler --min-count 0 --max-count 2
+  --enable-cluster-autoscaler --min-count 0 --max-count 1
 ```
 
 Verify the Azure configuration:
@@ -375,7 +391,7 @@ Re-enable autoscaling with zero as the minimum, reapply the confidential deploym
 
 ```bash
 az aks nodepool update --resource-group "$ResourceGroup" --cluster-name "$ClusterName" \
-  --name cvm --enable-cluster-autoscaler --min-count 0 --max-count 2
+  --name cvm --enable-cluster-autoscaler --min-count 0 --max-count 1
 Started=$(date +%s)
 kubectl apply -f "$MixedManifest"
 if ScaleResult=$(kubectl rollout status deployment/confidential-api -n mixed-workloads --timeout=600s 2>&1); then
@@ -415,11 +431,13 @@ kubectl get pods -n mixed-workloads -o wide
 If autoscaling does not begin within the approved observation window, inspect cluster-autoscaler status and scheduler events, then explicitly restore one node:
 
 ```bash
-az aks nodepool update --resource-group "$ResourceGroup" --cluster-name "$ClusterName" \
-  --name cvm --disable-cluster-autoscaler
-az aks nodepool scale --resource-group "$ResourceGroup" --cluster-name "$ClusterName" \
-  --name cvm --node-count 1
-kubectl rollout status deployment/confidential-api -n mixed-workloads --timeout=600s
+if [[ "$ScaleFromZeroReady" == false ]]; then
+  az aks nodepool update --resource-group "$ResourceGroup" --cluster-name "$ClusterName" \
+    --name cvm --disable-cluster-autoscaler
+  az aks nodepool scale --resource-group "$ResourceGroup" --cluster-name "$ClusterName" \
+    --name cvm --node-count 1
+  kubectl rollout status deployment/confidential-api -n mixed-workloads --timeout=600s
+fi
 ```
 
 Scale-to-zero saves idle CVM compute cost but adds cold-start time and depends on regional capacity. Workloads with strict availability or latency targets need warm capacity, multiple replicas, disruption controls, capacity reservations where appropriate, and a tested scaling policy. Autoscaling also does not decide whether a workload is confidential; selectors and policy still enforce that contract.
@@ -514,11 +532,20 @@ Delete workloads first, scale down the confidential pool, inspect the dedicated 
 <summary>Solution: complete teardown</summary>
 
 ```bash
-kubectl delete namespace mixed-workloads --ignore-not-found --wait=true
-az aks nodepool update --resource-group "$ResourceGroup" --cluster-name "$ClusterName" \
-  --name cvm --disable-cluster-autoscaler
-az aks nodepool scale --resource-group "$ResourceGroup" --cluster-name "$ClusterName" \
-  --name cvm --node-count 0
+kubectl delete namespace mixed-workloads --ignore-not-found --wait=true --timeout=300s
+Pools=$(az aks nodepool list --resource-group "$ResourceGroup" --cluster-name "$ClusterName" -o json)
+CvmPool=$(jq -ec 'if type == "array" then [.[] | select(.name == "cvm")]
+  else error("Expected node-pool array") end |
+  if length <= 1 then . else error("Ambiguous CVM pool inventory") end' <<< "$Pools") ||
+  { printf 'No usable CVM pool inventory; inspect the AKS creation result before cleanup.\n' >&2; exit 1; }
+if jq -e 'length == 1' <<< "$CvmPool" > /dev/null; then
+  if jq -e '.[0].enableAutoScaling == true' <<< "$CvmPool" > /dev/null; then
+    az aks nodepool update --resource-group "$ResourceGroup" --cluster-name "$ClusterName" \
+      --name cvm --disable-cluster-autoscaler
+  fi
+  az aks nodepool scale --resource-group "$ResourceGroup" --cluster-name "$ClusterName" \
+    --name cvm --node-count 0
+fi
 az resource list --resource-group "$ResourceGroup" -o table
 ```
 

@@ -220,18 +220,27 @@ Test that the worker cannot call the API directly:
 
 ```bash
 worker=$(kubectl get pod -n orders -l app=order-worker -o jsonpath='{.items[0].metadata.name}')
-kubectl exec -n orders "$worker" -- python -c \
-  "import urllib.request; urllib.request.urlopen('http://order-api/readyz', timeout=5)"
+Status=0
+Denial=$(kubectl exec -n orders "$worker" -- python -c \
+  "import urllib.request; urllib.request.urlopen('http://order-api/readyz', timeout=5)" 2>&1) || Status=$?
+printf '%s\n' "$Denial"
+[[ "$Status" != 0 ]] || { printf '%s\n' 'Unexpected worker-to-API access.' >&2; exit 1; }
+grep -Ei 'timed out|TimeoutError|Connection refused' <<< "$Denial"
 ```
 
-Expected failure: timeout/denial, not HTTP success. Run expected-failure commands separately because native errors stop the current invocation.
+Expected failure: timeout/connection denial, not HTTP success. DNS, Kubernetes authorization and exec errors are not the expected policy result. The guarded command keeps the strict-mode session alive on the expected failure.
 
 Test unapproved outbound HTTPS from an API pod:
 
 ```bash
 pod=$(kubectl get pod -n orders -l app=order-api -o jsonpath='{.items[0].metadata.name}')
-kubectl exec -n orders "$pod" -- python -c \
-  "import urllib.request; urllib.request.urlopen('https://example.org', timeout=10)"
+OutboundTestUtc=$(date -u +%FT%TZ)
+Status=0
+Denial=$(kubectl exec -n orders "$pod" -- python -c \
+  "import urllib.request; urllib.request.urlopen('https://example.org', timeout=10)" 2>&1) || Status=$?
+printf '%s\n' "$Denial"
+[[ "$Status" != 0 ]] || { printf '%s\n' 'Unexpected unapproved outbound HTTPS access.' >&2; exit 1; }
+grep -Ei 'HTTP Error (403|470)|timed out|TimeoutError|Connection (refused|reset)|RemoteDisconnected|UNEXPECTED_EOF_WHILE_READING' <<< "$Denial"
 ```
 
 Expect firewall denial and a corresponding log; a generic failure without destination/rule evidence is not proof of enforcement. Confirm approved Service Bus processing still works through the gateway.
@@ -247,27 +256,33 @@ In the workspace's firewall diagnostic records, filter to the test's UTC time, d
 <details>
 <summary>Solution</summary>
 
-Read the healthy record, then use a short-lived pod-local host override to simulate incorrect DNS on a disposable copy rather than corrupting a shared private zone:
+Read the healthy record, then temporarily patch the synthetic lab worker Deployment with a pod-local host override. This deliberately interrupts that live lab worker; it is not a disposable copy. The subshell's recovery trap removes the override and waits for recovery even if diagnostics fail. Do not require a healthy rollout while the fault is active: transport failure can restart the worker.
 
 ```bash
-patch=$(jq -nc --arg hostname "$(lab_value ServiceBusName).servicebus.windows.net" \
-  '{spec:{template:{spec:{hostAliases:[{ip:"192.0.2.1",hostnames:[$hostname]}]}}}}')
-kubectl patch deployment order-worker -n orders --type merge -p "$patch"
-kubectl logs -n orders deployment/order-worker --since=5m
-kubectl describe deployment order-worker -n orders
-```
-
-Inspect `/etc/hosts` inside the current worker pod and compare with `dig` on the management host. The pod override should produce a Service Bus timeout while the administrator still resolves the real private endpoint. This illustrates that resolution context matters; it is not an authoritative DNS-zone outage.
-
-```bash
-kubectl rollout status deployment/order-worker -n orders --timeout=300s
-worker=$(kubectl get pod -n orders -l app=order-worker -o jsonpath='{.items[0].metadata.name}')
-kubectl exec -n orders "$worker" -- python -c "from pathlib import Path; print(Path('/etc/hosts').read_text())"
 dig "$(lab_value ServiceBusName).servicebus.windows.net"
-kubectl logs -n orders "$worker" --since=5m
+(
+  set -euo pipefail
+  trap 'Status=$?; kubectl patch deployment order-worker -n orders --type merge -p "{\"spec\":{\"template\":{\"spec\":{\"hostAliases\":null}}}}" || Status=$?; kubectl rollout status deployment/order-worker -n orders --timeout=300s || Status=$?; exit "$Status"' EXIT
+  patch=$(jq -nc --arg hostname "$(lab_value ServiceBusName).servicebus.windows.net" \
+    '{spec:{template:{spec:{hostAliases:[{ip:"192.0.2.1",hostnames:[$hostname]}]}}}}')
+  kubectl patch deployment order-worker -n orders --type merge -p "$patch"
+  worker=''
+  for i in {1..30}; do
+    Pods=$(kubectl get pods -n orders -l app=order-worker -o json)
+    worker=$(jq -r '[.items[] | select(any(.spec.hostAliases[]?; .ip == "192.0.2.1")) | .metadata.name][0] // empty' <<< "$Pods")
+    if [[ -n "$worker" ]]; then break; fi
+    sleep 2
+  done
+  [[ -n "$worker" ]] || { printf '%s\n' 'No pod with the injected host override appeared.' >&2; exit 1; }
+  kubectl get pod -n orders "$worker" -o json | jq '{hostAliases:.spec.hostAliases,containers:.status.containerStatuses}'
+  sleep 30
+  kubectl logs -n orders "$worker" --since=5m
+)
 ```
 
-**Recovery:**
+Inspect the injected pod's hostAliases and container state, and its Service Bus timeout/restart logs. Compare with the healthy management-host `dig` result. Kubernetes projects hostAliases into the pod's `/etc/hosts`; a CrashLoopBackOff can prevent exec diagnostics. This illustrates that resolution context matters; it is not an authoritative DNS-zone outage.
+
+**Recovery after interruption/host loss:** the trap normally performs this automatically. If the host was lost or the subshell was forcibly terminated, run these commands before continuing:
 
 ```bash
 kubectl patch deployment order-worker -n orders --type merge \

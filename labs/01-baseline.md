@@ -102,7 +102,7 @@ az deployment operation group list -g "$(lab_value ResourceGroup)" -n foundation
   --query "[?properties.provisioningState=='Failed'].properties.statusMessage" -o json
 ```
 
-A newly created identity/role can need propagation. Inspect role scope and principal before retrying; do not solve it by assigning Owner to every identity.
+A newly created identity/role can need propagation. Inspect role scope and principal before retrying; do not solve it by assigning Owner to every identity. A failed/canceled foundation deployment may have no outputs: `use-lab.sh` reports that state and loads bootstrap settings only so you can inspect the failure and retry the initial deployment. Generated service names are unavailable until usable outputs exist. A deployment still in progress, malformed metadata, or a successful deployment missing required outputs is a stop condition, not an empty successful baseline.
 
 </details>
 
