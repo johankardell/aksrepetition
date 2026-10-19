@@ -10,9 +10,13 @@ param adminGroupObjectId string
 param sshPublicKey string
 param nodeAdminUsername string = 'aksoperator'
 param vmSize string = 'Standard_D4ds_v5'
+param buildVmSize string = 'Standard_B2s'
+@description('Separate public RSA SSH key for the private build VM. Never supply a private key.')
+param buildVmSshPublicKey string
 param zones array = ['1', '2', '3']
 @description('First two octets of the spoke VNet. Use a different value for the secondary region.')
 param networkPrefix string = '10.40'
+param hubPrefix string = '10.50'
 
 var suffix = uniqueString(resourceGroup().id)
 var tags = { purpose: 'aks-enterprise-refresher', environment: 'lab' }
@@ -21,6 +25,19 @@ var networkContributor = subscriptionResourceId(
   '4d97b98b-1d4f-4787-a291-c67834d212e7'
 )
 
+module egress 'firewall.bicep' = {
+  name: 'egress'
+  params: {
+    prefix: prefix
+    location: location
+    spokeName: '${prefix}-vnet'
+    spokeAddress: '${networkPrefix}.0.0/16'
+    nodesAddress: '${networkPrefix}.0.0/20'
+    managementAddress: '${networkPrefix}.16.0/24'
+    hubPrefix: hubPrefix
+    deployPeering: false
+  }
+}
 resource vnet 'Microsoft.Network/virtualNetworks@2024-05-01' = {
   name: '${prefix}-vnet'
   location: location
@@ -29,7 +46,14 @@ resource vnet 'Microsoft.Network/virtualNetworks@2024-05-01' = {
     addressSpace: { addressPrefixes: ['${networkPrefix}.0.0/16'] }
     subnets: [
       { name: 'nodes', properties: { addressPrefix: '${networkPrefix}.0.0/20' } }
-      { name: 'management', properties: { addressPrefix: '${networkPrefix}.16.0/24' } }
+      {
+        name: 'management'
+        properties: {
+          addressPrefix: '${networkPrefix}.16.0/24'
+          defaultOutboundAccess: false
+          routeTable: { id: egress.outputs.routeTableId }
+        }
+      }
       {
         name: 'endpoints'
         properties: { addressPrefix: '${networkPrefix}.17.0/24', privateEndpointNetworkPolicies: 'Disabled' }
@@ -37,6 +61,34 @@ resource vnet 'Microsoft.Network/virtualNetworks@2024-05-01' = {
       { name: 'gateway', properties: { addressPrefix: '${networkPrefix}.18.0/24' } }
       { name: 'AzureBastionSubnet', properties: { addressPrefix: '${networkPrefix}.19.0/26' } }
     ]
+  }
+}
+module peering 'vnet-peering.bicep' = {
+  name: 'network-peering'
+  params: {
+    spokeName: vnet.name
+    hubName: egress.outputs.hubVnetName
+  }
+}
+module buildVm 'build-vm.bicep' = {
+  name: 'build-vm'
+  params: {
+    prefix: prefix
+    location: location
+    vmSize: buildVmSize
+    sshPublicKey: buildVmSshPublicKey
+    kubernetesVersion: kubernetesVersion
+    managementSubnetId: '${vnet.id}/subnets/management'
+    bastionSubnetAddress: '${networkPrefix}.19.0/26'
+  }
+  dependsOn: [peering]
+}
+module bastion 'bastion.bicep' = {
+  name: 'bastion'
+  params: {
+    prefix: prefix
+    location: location
+    vnetName: vnet.name
   }
 }
 resource clusterIdentity 'Microsoft.ManagedIdentity/userAssignedIdentities@2023-01-31' = {
@@ -227,6 +279,16 @@ module workload 'workload-identities.bicep' = {
 output clusterName string = aks.name
 output clusterId string = aks.id
 output vnetId string = vnet.id
+output bastionId string = bastion.outputs.bastionId
+output bastionName string = bastion.outputs.bastionName
+output bastionPublicIpId string = bastion.outputs.publicIpId
+output buildVmId string = buildVm.outputs.vmId
+output buildVmName string = buildVm.outputs.vmName
+output buildVmUsername string = buildVm.outputs.username
+output buildVmPrivateIp string = buildVm.outputs.privateIp
+output routeTableId string = egress.outputs.routeTableId
+output firewallPrivateIp string = egress.outputs.firewallPrivateIp
+output firewallPublicIp string = egress.outputs.firewallPublicIp
 output nodesSubnetId string = '${vnet.id}/subnets/nodes'
 output endpointsSubnetId string = '${vnet.id}/subnets/endpoints'
 output acrName string = acr.name

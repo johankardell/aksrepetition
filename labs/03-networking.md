@@ -4,6 +4,8 @@
 
 **Prerequisite:** labs 1-2 complete, a working private management path, Azure CLI 2.86+, and approved Azure Firewall/Private Link charges. The required ingress is internal; global/public publishing is reserved for lab 10.
 
+Run Kubernetes commands through lab 1's active native Bastion session. This lab also requires the approved private data-plane/build host: a Bastion API tunnel does not make workstation `dig`, `curl`, `podman` or secret operations reach private endpoints. Run the mixed command blocks on that private host with its own Bastion API session. Supply routing/DNS before disabling public access; keep Bastion's subnet off the AKS node route table.
+
 ## Directives
 
 ### 1. Create private service endpoints with DNS
@@ -44,7 +46,7 @@ Confirm new pods pull images, mount CSI, and process a fresh order. Public Azure
 
 ### 2. Establish explicit egress via a peered firewall hub
 
-**Task:** review and deploy the bounded firewall hub, route AKS egress through it, and enable diagnostic evidence. Approve the standing firewall cost first; do not use wildcard allow rules or redeploy the original foundation over the progressed cluster.
+**Task:** review the foundation's existing bounded firewall hub, transition AKS egress through it, and enable diagnostic evidence. Foundation already pays the standing firewall cost for build-VM egress; do not use unrestricted wildcard allow rules or replay foundation over the progressed cluster.
 
 <details>
 <summary>Solution</summary>
@@ -52,10 +54,6 @@ Confirm new pods pull images, mount CSI, and process a fresh order. Public Azure
 Review `infra/firewall.bicep`: AKS FQDN tag, HTTPS identity/GitOps/monitoring allowances, and required control-plane network rules. The private API is not protected with public API authorized ranges; those are a different public endpoint design.
 
 ```bash
-az deployment group what-if -g "$(lab_value ResourceGroup)" -n egress \
-  -f ./infra/firewall.bicep -p "prefix=$(lab_value Prefix)" "location=$(lab_value Location)" "spokeName=$(lab_value Prefix)-vnet"
-az deployment group create -g "$(lab_value ResourceGroup)" -n egress \
-  -f ./infra/firewall.bicep -p "prefix=$(lab_value Prefix)" "location=$(lab_value Location)" "spokeName=$(lab_value Prefix)-vnet" -o none
 egress=$(az deployment group show -g "$(lab_value ResourceGroup)" -n egress --query properties.outputs -o json)
 az role assignment create --assignee-object-id "$(output_value clusterPrincipalId)" \
   --assignee-principal-type ServicePrincipal --role 'Network Contributor' --scope "$(jq -r '.routeTableId.value' <<< "$egress")" -o none
@@ -78,7 +76,7 @@ az monitor diagnostic-settings create --name lab-firewall --resource "$firewallI
   --workspace "$(output_value workspaceId)" --logs "$logs" -o none
 ```
 
-Inspect documented AKS and add-on outbound endpoints whenever enabling new features. Do not add `*` allow rules to hide an incomplete allowlist. The management/build host needs its own explicit outbound path; this route table is attached only to AKS nodes.
+Inspect documented AKS and add-on outbound endpoints whenever enabling new features. Do not add `*` allow rules to hide an incomplete allowlist. Management already uses this route table with separately scoped package/build rules; this task adds only the node subnet. Keep Bastion's subnet unrouted through the firewall. Older foundations without this hub must first receive a reviewed focused firewall/peering deployment, not a full bootstrap replay.
 
 </details>
 

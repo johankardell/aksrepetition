@@ -43,6 +43,12 @@ _use_lab_load() {
     value=$(jq -er .ImageTag <<<"$lab") || return
     [[ $value =~ ^[A-Za-z0-9_][A-Za-z0-9_.-]{0,127}$ ]] ||
         _use_lab_error 'ImageTag must be a valid OCI image tag.' || return
+    value=$(jq -er 'if has("BuildVmSize") then .BuildVmSize | select(type == "string")
+        else "Standard_B2s" end' <<<"$lab") ||
+        _use_lab_error 'BuildVmSize must be an Azure Standard VM SKU string.' || return
+    [[ $value =~ ^Standard_[A-Za-z0-9_]+$ ]] ||
+        _use_lab_error 'BuildVmSize must be an Azure Standard VM SKU.' || return
+    lab=$(jq --arg size "$value" '. + {BuildVmSize: $size}' <<<"$lab") || return
 
     subscription_id=$(jq -er .SubscriptionId <<<"$lab") || return
     tenant_id=$(jq -er .TenantId <<<"$lab") || return

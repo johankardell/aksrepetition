@@ -59,7 +59,7 @@ resource testFederations 'Microsoft.ManagedIdentity/userAssignedIdentities/feder
 }]
 var dataRoles = [
   '69a216fc-b8fb-44d8-bc22-1f3c2cd27a39'
-  '4f6a3b9b-b2e8-4167-8ed5-3e4263470b02'
+  '4f6d3b9b-027b-4f4c-9142-0e5a2a2247e0'
 ]
 resource testRoles 'Microsoft.Authorization/roleAssignments@2022-04-01' = [for (role, i) in dataRoles: {
   name: guid(queue.id, testIdentities[i].id, role)

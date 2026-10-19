@@ -6,6 +6,8 @@
 
 This lab creates a dedicated resource group and AKS cluster. It does not use or modify the cumulative labs 1-10 environment.
 
+Use a separate Bash session outside the cumulative Bastion subshell, on a host with private routing/DNS to this lab's dedicated cluster. The working-folder kubeconfig below is isolated from both your default config and any active cumulative tunnel; that tunnel does not reach this independent API.
+
 ## Prerequisites, cost, and safety boundary
 
 Use Azure CLI 2.83.0 or later, Linux Bash, `jq`, `curl`, `gh`, `kubectl`, and an account that can create AKS resources and role assignments in a dedicated subscription or resource group. Install or update the `k8s-extension` CLI extension. Select a region supported by Azure Container Storage and a storage-optimized VM SKU with local NVMe capacity and sufficient quota.
@@ -22,6 +24,7 @@ Create an ignored disposable working folder for rendered manifests and evidence:
 set -euo pipefail
 umask 077
 Work=$(mktemp -d "${TMPDIR:-/tmp}/aks-rabbitmq-storage-lab.XXXXXXXX")
+export KUBECONFIG="$Work/kubeconfig"
 printf 'Working folder: %s\n' "$Work"
 ```
 

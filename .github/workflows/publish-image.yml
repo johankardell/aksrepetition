@@ -35,8 +35,9 @@ jobs:
           bash ./scripts/connect-acr-podman.sh --registry-name "$ACR_NAME" --registry-server "$REGISTRY"
           image="$REGISTRY/order-app:$GITHUB_SHA"
           podman build --pull=always --platform linux/amd64 --sbom=syft-spdx \
-            --sbom-output image-sbom.spdx.json --metadata-file image-metadata.json \
+            --sbom-output image-sbom.spdx.json \
             --file app/Containerfile --tag "$image" app
+          podman image inspect "$image" | jq -e '.[0] | select(type == "object")' > image-metadata.json
           jq -e '.spdxVersion | startswith("SPDX-")' image-sbom.spdx.json >/dev/null
           jq -e 'type == "object"' image-metadata.json >/dev/null
           podman push --digestfile image-digest.txt "$image"

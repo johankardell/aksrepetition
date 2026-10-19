@@ -6,6 +6,8 @@ Required after labs 1–7. Budget for PostgreSQL General Purpose, storage, backu
 
 ## 1. Inspect the exact recovery support boundary
 
+Keep a native Bastion session for Kubernetes/Flux commands on this host. SQL, private DNS checks and TCP-5432 tests use the host's private data-plane connectivity, not Bastion; an API-only workstation cannot initialize or verify the database. Extra Kubernetes terminals share the active temporary `KUBECONFIG` as in README.
+
 **Challenge:** Inventory the cluster, CSI drivers, PostgreSQL client and regional SKU support. Decide which state this exercise can protect and which recovery claims it cannot make; retain the inventory and scope decision.
 
 Use a human Entra PostgreSQL administrator for initialization, not the app's managed identity. Needed permissions: resource creation, private DNS/network writes, role-assignment writes, AKS platform administration, and Backup Contributor. The backup role-preparation helper assigns documented roles on the dedicated snapshot group; inspect the resulting scope instead of granting subscription Owner.

@@ -6,6 +6,8 @@
 
 This lab creates a dedicated resource group and cluster. It does not use or modify the cumulative labs 1-10 environment.
 
+Use a separate Bash session outside the cumulative Bastion subshell, on a host with private routing/DNS to this lab's dedicated cluster. The working-folder kubeconfig below is isolated from both your default config and any active cumulative tunnel; that tunnel does not reach this independent API.
+
 ## Prerequisites, cost, and scope
 
 Use a dedicated subscription or resource group, Azure CLI, Linux Bash, `jq`, and `kubectl`. The operator needs permission to create AKS clusters and node pools. Select a region where a supported AMD confidential VM size such as `Standard_DC4as_v5` is available to the subscription with enough family quota.
@@ -22,6 +24,7 @@ Create an ignored disposable folder for manifests and evidence:
 set -euo pipefail
 umask 077
 Work=$(mktemp -d "${TMPDIR:-/tmp}/aks-confidential-compute-lab.XXXXXXXX")
+export KUBECONFIG="$Work/kubeconfig"
 printf 'Working folder: %s\n' "$Work"
 ```
 

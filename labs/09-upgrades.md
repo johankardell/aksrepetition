@@ -6,6 +6,8 @@ Prerequisites: labs 1–8, last successful backup and PostgreSQL restore test, s
 
 ## 1. Build a specific go/no-go record
 
+Run Kubernetes/Flux operations in the active native Bastion subshell. Terminal B retains that tunnel; terminal A needs private application HTTPS connectivity and shares the temporary `KUBECONFIG` only if it also runs Kubernetes diagnostics. A closed tunnel requires a fresh session, not fetching credentials over its loopback kubeconfig.
+
 **Task:** choose a currently advertised GA upgrade target and document compatibility, capacity, recovery readiness and blockers before authorizing the change. If no supported target exists, defer the version-upgrade portion; do not manufacture one by downgrading or selecting an unsupported release.
 
 <details>

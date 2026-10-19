@@ -53,7 +53,7 @@ resource receive 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
     principalType: 'ServicePrincipal'
     roleDefinitionId: subscriptionResourceId(
       'Microsoft.Authorization/roleDefinitions',
-      '4f6a3b9b-b2e8-4167-8ed5-3e4263470b02'
+      '4f6d3b9b-027b-4f4c-9142-0e5a2a2247e0'
     )
   }
 }

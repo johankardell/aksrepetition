@@ -6,6 +6,8 @@
 
 **Ownership/path.** CI → Entra OIDC → ACR private endpoint writes images only. Flux → HTTPS Git with a repository credential pulls manifests; kubelet → ACR with its existing pull identity fetches images. GitHub OIDC is **not** authentication from Flux to a private Git repository. Platform bootstrap reconciles `gitops/clusters/primary`; the **`orders` Kustomization in `flux-system`** reconciles `gitops/clusters/primary/apps/orders`. `orders-test` uses its own namespace, queue and two managed identities. It is still the same cluster and Service Bus namespace, not a production isolation boundary.
 
+Start `scripts/connect-aks-bastion.sh` on the private management host and run Kubernetes/Flux commands in its subshell. Extra terminals share its exact active temporary `KUBECONFIG` as in README; do not fetch credentials over that file. Private ACR/DNS/HTTPS tests still use the host's data-plane connectivity, not the API tunnel.
+
 **Inventory/permissions/cost.** Reuse AKS, ACR Premium, Service Bus Premium, Firewall and private management connectivity. Add three user-assigned managed identities, three federations and one queue; identities have no hourly compute charge, while runner VM/storage, image storage, registry transfers and extra test replicas do. A human temporarily needs the AKS **Azure Kubernetes Service RBAC Cluster Admin** role for Flux CRDs/bootstrap, not `--admin` credentials. Its standing application role remains namespace scoped. The infrastructure operator needs resource deployment and role-assignment permissions. CI receives only **AcrPush on this registry** (classic RBAC registry mode); it receives no AKS, subscription Contributor, Key Vault or Service Bus role. With ABAC-enabled ACR, use repository-scoped repository writer permissions instead of assuming AcrPush works.
 
 ## Numbered directives
@@ -32,7 +34,7 @@ fi
 gh repo view "$GitHubRepository" --json nameWithOwner,isPrivate,defaultBranchRef
 git remote -v
 git status --short
-az aks get-credentials -g "$(lab_value ResourceGroup)" -n "$(lab_value ClusterName)" --overwrite-existing
+: "${KUBECONFIG:?Start the native Bastion session before GitOps preflight}"
 kubelogin convert-kubeconfig -l azurecli
 kubectl auth can-i get deployments -n orders
 dig "$(lab_value RegistryServer)"
@@ -76,6 +78,8 @@ az role assignment list --scope "$(output_value acrId)" --all -o table
 
 In the existing repository's **Settings → Environments**, create `acr-publish`, require reviewers and restrict deployments to `main`. Register the runner using GitHub's current registration instructions with labels `self-hosted,Linux,X64,aks-private`.
 
+Foundation's private build VM has the tools and private network path, but is not automatically a runner. If using it for this synthetic exercise, provision a separate unprivileged runner account with its own rootless Podman mappings/storage and ephemeral registration; do not run jobs as `labbuilder` or share the operator's Entra/GitHub caches. A separately isolated runner VM is the customer recommendation. Preserve the publisher's OIDC-only, registry-scoped identity.
+
 ```bash
 gh variable set AZURE_CLIENT_ID --env acr-publish --repo "$GitHubRepository" --body "$(jq -r '.publisherClientId.value' <<< "$Delivery")"
 gh variable set AZURE_TENANT_ID --env acr-publish --repo "$GitHubRepository" --body "$(lab_value TenantId)"
@@ -92,7 +96,7 @@ Compare the deployed federation with the exact repository/environment spelling, 
 
 **Challenge:** publish a reviewed application image, retain its immutable reference and supply-chain artifacts, and mirror the matching Flux controller images into private ACR.
 
-Review `.github/workflows/publish-image.yml` and commit the authored curriculum to the existing protected repository through its normal review process. The workflow runs on `main` changes under `app` or manual dispatch, **not** pull requests. The image build is `app/Containerfile`, context `app`, linux/amd64. It retains the pushed digest, Podman build metadata and an SPDX SBOM. These artifacts are evidence, not signed provenance or vulnerability admission enforcement.
+Review `.github/workflows/publish-image.yml` and commit the authored curriculum to the existing protected repository through its normal review process. The workflow runs on `main` changes under `app` or manual dispatch, **not** pull requests. The image build is `app/Containerfile`, context `app`, linux/amd64. It retains the pushed digest, image inspection metadata and an SPDX SBOM. These artifacts are evidence, not signed provenance or vulnerability admission enforcement.
 
 **Constraints:** mirror only from the VNet-connected Linux Podman host using a separately authorized operator's registry-scoped push permission and the same Flux CLI version as directive 5. Do not use `az acr build` on the default public task pool after registry public access is disabled. Update pinned Actions SHAs through review; also restrict allowed actions, add vulnerability/license checks and add signed provenance/attestations before enforcing them at admission.
 

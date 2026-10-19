@@ -13,6 +13,7 @@ ROOT = pathlib.Path(__file__).resolve().parents[1]
 SUBSCRIPTION = "11111111-1111-1111-1111-111111111111"
 TENANT = "22222222-2222-2222-2222-222222222222"
 ADMIN = "33333333-3333-3333-3333-333333333333"
+BASTION_ID = f"/subscriptions/{SUBSCRIPTION}/resourceGroups/test-rg/providers/Microsoft.Network/bastionHosts/testlab-bastion"
 
 
 class BashHelpersTests(unittest.TestCase):
@@ -42,7 +43,7 @@ class BashHelpersTests(unittest.TestCase):
         self.env = dict(os.environ, PATH=f"{binary}:{os.environ['PATH']}",
                         TEST_ROOT=str(self.root), TEST_SUBSCRIPTION=SUBSCRIPTION)
         self.mock(binary / "az", """#!/usr/bin/env python3
-import json, os, pathlib, sys
+import json, os, pathlib, socket, sys
 root = pathlib.Path(os.environ["TEST_ROOT"])
 args = sys.argv[1:]
 if os.environ.get("TEST_AZ_FAIL") == "1":
@@ -56,6 +57,11 @@ elif args[:3] == ["deployment", "group", "list"]:
 elif args[:3] == ["deployment", "group", "show"]:
     if args[args.index("-n") + 1] == "delivery":
         print('{"testApiClientId":{"value":"test-api-client"},"testWorkerClientId":{"value":"test-worker-client"}}')
+    elif args[args.index("-n") + 1] == "bastion":
+        print("/subscriptions/11111111-1111-1111-1111-111111111111/resourceGroups/test-rg/providers/Microsoft.Network/bastionHosts/testlab-bastion")
+    elif args[args.index("-n") + 1] == "build-vm":
+        print(json.dumps({"vmId": {"value": "/subscriptions/11111111-1111-1111-1111-111111111111/resourceGroups/test-rg/providers/Microsoft.Compute/virtualMachines/testlab-build"},
+                          "username": {"value": "labbuilder"}}))
     elif args[args.index("--query") + 1] == "{provisioningState:properties.provisioningState,outputs:properties.outputs}":
         if "TEST_FOUNDATION_RESPONSE" in os.environ:
             sys.stdout.write(os.environ["TEST_FOUNDATION_RESPONSE"])
@@ -66,6 +72,47 @@ elif args[:3] == ["deployment", "group", "show"]:
         print((root / "outputs.json").read_text())
 elif args[:2] == ["acr", "login"]:
     print(json.dumps({"loginServer": os.environ.get("TEST_REGISTRY", "testregistry.azurecr.io"), "accessToken": "synthetic-test-token"}))
+elif args[:2] == ["aks", "show"]:
+    print(os.environ.get("TEST_CLUSTER", json.dumps({
+        "apiServerAccessProfile": {"enablePrivateCluster": True, "enablePrivateClusterPublicFqdn": False},
+        "disableLocalAccounts": True, "aadProfile": {"managed": True, "enableAzureRbac": True},
+        "privateFqdn": "testlab.private.azmk8s.io",
+        "id": "/subscriptions/11111111-1111-1111-1111-111111111111/resourceGroups/test-rg/providers/Microsoft.ContainerService/managedClusters/testlab-aks",
+    })))
+elif args[:3] == ["network", "bastion", "show"]:
+    print(os.environ.get("TEST_BASTION", json.dumps({
+        "sku": {"name": "Standard"}, "enableTunneling": True, "provisioningState": "Succeeded",
+        "id": "/subscriptions/11111111-1111-1111-1111-111111111111/resourceGroups/test-rg/providers/Microsoft.Network/bastionHosts/testlab-bastion",
+    })))
+elif args[:2] == ["aks", "get-credentials"]:
+    assert "--admin" not in args
+    cluster = args[args.index("-n") + 1]
+    pathlib.Path(args[args.index("--file") + 1]).write_text(json.dumps({
+        "cluster": cluster, "context": cluster,
+    }))
+    sys.exit(int(os.environ.get("TEST_CREDENTIAL_STATUS", "0")))
+elif args[:3] == ["aks", "bastion", "tunnel"]:
+    if "--help" not in args:
+        assert "--admin" not in args
+        path = pathlib.Path(args[args.index("--kubeconfig-path") + 1])
+        (root / "bastion-call.json").write_text(json.dumps({
+            "args": args, "path": str(path), "mode": path.stat().st_mode & 0o777,
+            "credential": path.read_text(),
+            "converted": (root / "kubelogin-call.json").exists(),
+        }))
+        sys.exit(int(os.environ.get("TEST_TUNNEL_STATUS", "0")))
+elif args[:3] == ["network", "bastion", "tunnel"]:
+    if "--help" not in args:
+        (root / "network-bastion-call.json").write_text(json.dumps(args))
+        listener = socket.socket()
+        listener.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        listener.bind(("127.0.0.1", int(args[args.index("--port") + 1])))
+        listener.listen()
+        while True:
+            connection, _ = listener.accept()
+            connection.close()
+elif args[:3] == ["network", "bastion", "ssh"]:
+    (root / "build-ssh-call.json").write_text(json.dumps(args))
 elif args[:4] == ["monitor", "log-analytics", "workspace", "show"]:
     print("synthetic-workspace")
 elif args[:1] == ["rest"]:
@@ -75,6 +122,11 @@ elif args[:3] in (["deployment", "group", "what-if"], ["deployment", "group", "c
 else:
     sys.exit("Unexpected Azure command: " + repr(args))
 """)
+        self.mock(binary / "kubelogin", """#!/usr/bin/env python3
+import json, os, pathlib, sys
+(pathlib.Path(os.environ["TEST_ROOT"]) / "kubelogin-call.json").write_text(json.dumps(sys.argv[1:]))
+sys.exit(int(os.environ.get("TEST_KUBELOGIN_STATUS", "0")))
+""")
         self.mock(binary / "podman", """#!/usr/bin/env python3
 import json, os, pathlib, sys
 path = pathlib.Path(os.environ["TEST_ROOT"]) / "podman-call.json"
@@ -82,10 +134,27 @@ path.write_text(json.dumps({"args":sys.argv[1:], "stdin":sys.stdin.read()}))
 print("Login Succeeded!")
 """)
         self.mock(binary / "kubectl", """#!/usr/bin/env python3
-import pathlib, re, sys
-if sys.argv[1] != "kustomize":
-    sys.exit("Only offline kustomize is allowed in these tests.")
-root = pathlib.Path(sys.argv[2])
+import json, os, pathlib, re, sys
+args = sys.argv[1:]
+if args[:1] == ["--kubeconfig"] and args[2:4] == ["config", "rename-context"]:
+    path = pathlib.Path(args[1])
+    content = json.loads(path.read_text())
+    assert content["context"] == args[4]
+    content["context"] = args[5]
+    path.write_text(json.dumps(content))
+    (pathlib.Path(os.environ["TEST_ROOT"]) / "kubectl-rename-call.json").write_text(json.dumps(args))
+    sys.exit(0)
+if args[:1] == ["--kubeconfig"] and args[2:4] == ["config", "set-cluster"]:
+    path = pathlib.Path(args[1])
+    content = json.loads(path.read_text())
+    assert content["cluster"] == args[4]
+    content["server"] = args[args.index(next(item for item in args if item.startswith("--server=")))].split("=", 1)[1]
+    content["tls-server-name"] = args[args.index(next(item for item in args if item.startswith("--tls-server-name=")))].split("=", 1)[1]
+    path.write_text(json.dumps(content))
+    sys.exit(0)
+if args[:1] != ["kustomize"]:
+    sys.exit("Only offline kustomize and context rename are allowed in these tests.")
+root = pathlib.Path(args[1])
 if not (root / "kustomization.yaml").is_file():
     sys.exit("Missing Kustomization")
 for path in root.rglob("*.yaml"):
@@ -212,6 +281,7 @@ print("offline render")
         keys = self.root / "rendered/keys"
         keys.mkdir(parents=True)
         (keys / "aks.pub").write_text("ssh-rsa synthetic-public-key\n")
+        (keys / "build-vm.pub").write_text("ssh-rsa synthetic-build-public-key\n")
         self.run_script("scripts/deploy-foundation.sh", "--apply", "--confirm", input="wrong-rg\n", success=False)
         calls = [json.loads(line) for line in (self.root / "az-calls.jsonl").read_text().splitlines()]
         self.assertFalse(any(call[:3] == ["deployment", "group", "create"] for call in calls))
@@ -304,6 +374,179 @@ with (pathlib.Path(os.environ["TEST_ROOT"]) / "mirror-calls.jsonl").open("a") as
         result = self.run_script("ops/invoke-logs-query.sh", "--query", query)
         self.assertEqual(json.loads(result.stdout), {"query": query, "timespan": "PT1H"})
 
+    def test_bastion_uses_user_credentials_private_file_and_cleanup(self):
+        original = self.root / "original-kubeconfig"
+        original.write_text("untouched default kubeconfig")
+        self.env["KUBECONFIG"] = str(original)
+        for status in (0, 23):
+            with self.subTest(tunnel_status=status):
+                self.env["TEST_TUNNEL_STATUS"] = str(status)
+                result = self.run_script("scripts/connect-aks-bastion.sh", success=status == 0)
+                self.assertEqual(result.returncode, status)
+                call = json.loads((self.root / "bastion-call.json").read_text())
+                self.assertEqual(call["mode"], 0o600)
+                self.assertNotIn(" ", call["path"])
+                credential = json.loads(call["credential"])
+                self.assertEqual(credential, {
+                    "cluster": "testlab-aks", "context": "testlab-aks-bastion",
+                })
+                self.assertTrue(call["converted"])
+                self.assertNotIn("--admin", call["args"])
+                self.assertEqual(call["args"][call["args"].index("--port") + 1], "8443")
+                self.assertEqual(call["args"][call["args"].index("--bastion") + 1], BASTION_ID)
+                self.assertFalse(pathlib.Path(call["path"]).exists())
+                self.assertEqual(original.read_text(), "untouched default kubeconfig")
+                self.assertNotIn(call["credential"], result.stdout + result.stderr)
+                conversion = json.loads((self.root / "kubelogin-call.json").read_text())
+                self.assertEqual(conversion, ["convert-kubeconfig", "--kubeconfig", call["path"],
+                                              "--login", "azurecli"])
+                calls = [json.loads(line) for line in (self.root / "az-calls.jsonl").read_text().splitlines()]
+                credentials = [args for args in calls if args[:2] == ["aks", "get-credentials"]]
+                self.assertTrue(all("--file" in args and "--admin" not in args for args in credentials))
+                self.assertTrue(all("--context" not in args for args in credentials))
+                rename = json.loads((self.root / "kubectl-rename-call.json").read_text())
+                self.assertEqual(rename[2:], [
+                    "config", "rename-context", "testlab-aks", "testlab-aks-bastion",
+                ])
+                self.assertFalse(any(args[:3] in (["deployment", "group", "create"],
+                                                  ["network", "bastion", "create"]) for args in calls))
+
+    def test_bastion_explicit_target_needs_no_foundation_reads(self):
+        self.run_script("scripts/connect-aks-bastion.sh", "--resource-group", "secondary-rg",
+                        "--cluster-name", "secondary-aks", "--bastion-id", BASTION_ID,
+                        "--context", "secondary-aks-secondary", "--port", "08444")
+        calls = [json.loads(line) for line in (self.root / "az-calls.jsonl").read_text().splitlines()]
+        self.assertFalse(any(args[:1] == ["deployment"] for args in calls))
+        credentials = next(args for args in calls if args[:2] == ["aks", "get-credentials"])
+        self.assertEqual(credentials[credentials.index("-n") + 1], "secondary-aks")
+        self.assertNotIn("--context", credentials)
+        rename = json.loads((self.root / "kubectl-rename-call.json").read_text())
+        self.assertEqual(rename[2:], [
+            "config", "rename-context", "secondary-aks", "secondary-aks-secondary",
+        ])
+        call = json.loads((self.root / "bastion-call.json").read_text())
+        self.assertEqual(json.loads(call["credential"]), {
+            "cluster": "secondary-aks", "context": "secondary-aks-secondary",
+        })
+        self.assertEqual(call["args"][call["args"].index("--port") + 1], "8444")
+        self.assertFalse(pathlib.Path(call["path"]).exists())
+
+    def test_bastion_activation_uses_current_shell_and_restores_kubeconfig(self):
+        import socket
+
+        with socket.socket() as probe:
+            probe.bind(("127.0.0.1", 0))
+            port = probe.getsockname()[1]
+        self.env["TEST_ACTIVATION_PORT"] = str(port)
+        original = self.root / "original-kubeconfig"
+        original.write_text("untouched default kubeconfig")
+        self.env["KUBECONFIG"] = str(original)
+        command = """
+helper=$1
+set --
+source "$helper" --port "$TEST_ACTIVATION_PORT" || exit
+printf '%s' "$KUBECONFIG" > "$TEST_ROOT/active-kubeconfig-path"
+cp "$KUBECONFIG" "$TEST_ROOT/active-kubeconfig-copy"
+printf '%s' "$AKS_BASTION_LOG" > "$TEST_ROOT/active-log-path"
+kill -0 "$AKS_BASTION_PID"
+disconnect_aks_bastion || exit
+printf '%s' "$KUBECONFIG" > "$TEST_ROOT/restored-kubeconfig"
+[[ -z ${AKS_BASTION_PID:-} ]]
+"""
+        result = subprocess.run(
+            [self.shell, "-c", command, "activate-test",
+             str(self.root / "scripts/activate-aks-bastion.sh")],
+            cwd=self.root, env=self.env, text=True, capture_output=True,
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        active_path = pathlib.Path((self.root / "active-kubeconfig-path").read_text())
+        log_path = pathlib.Path((self.root / "active-log-path").read_text())
+        self.assertFalse(active_path.exists())
+        self.assertFalse(log_path.exists())
+        self.assertEqual((self.root / "restored-kubeconfig").read_text(), str(original))
+        self.assertEqual(original.read_text(), "untouched default kubeconfig")
+        active = json.loads((self.root / "active-kubeconfig-copy").read_text())
+        self.assertEqual(active, {
+            "cluster": "testlab-aks",
+            "context": "testlab-aks-bastion",
+            "server": f"https://localhost:{port}/",
+            "tls-server-name": "testlab.private.azmk8s.io",
+        })
+        call = json.loads((self.root / "network-bastion-call.json").read_text())
+        self.assertEqual(call[call.index("--target-resource-id") + 1],
+                         "/subscriptions/11111111-1111-1111-1111-111111111111/resourceGroups/test-rg/providers/Microsoft.ContainerService/managedClusters/testlab-aks")
+        self.assertEqual(call[call.index("--resource-port") + 1], "443")
+        self.assertEqual(call[call.index("--port") + 1], str(port))
+        self.assertIn("Run disconnect_aks_bastion when finished.", result.stdout)
+
+    def test_bastion_activation_must_be_sourced(self):
+        result = self.run_script("scripts/activate-aks-bastion.sh", success=False)
+        self.assertIn("Source this helper", result.stderr)
+
+    def test_bastion_rejects_insecure_clusters_and_unready_hosts(self):
+        cluster = {
+            "apiServerAccessProfile": {"enablePrivateCluster": True, "enablePrivateClusterPublicFqdn": False},
+            "disableLocalAccounts": True, "aadProfile": {"managed": True, "enableAzureRbac": True},
+            "privateFqdn": "testlab.private.azmk8s.io",
+        }
+        bastion = {"sku": {"name": "Standard"}, "enableTunneling": True,
+                   "provisioningState": "Succeeded"}
+        targets = [
+            ({**cluster, "disableLocalAccounts": False}, bastion),
+            ({**cluster, "apiServerAccessProfile": {"enablePrivateCluster": False,
+                                                  "enablePrivateClusterPublicFqdn": False}}, bastion),
+            ({**cluster, "apiServerAccessProfile": {"enablePrivateCluster": True,
+                                                  "enablePrivateClusterPublicFqdn": True}}, bastion),
+            ({**cluster, "aadProfile": {"managed": True, "enableAzureRbac": False}}, bastion),
+            (cluster, {**bastion, "sku": {"name": "Basic"}}),
+            (cluster, {**bastion, "enableTunneling": False}),
+            (cluster, {**bastion, "provisioningState": "Failed"}),
+        ]
+        for unsafe_cluster, unsafe_bastion in targets:
+            with self.subTest(cluster=unsafe_cluster, bastion=unsafe_bastion):
+                self.env["TEST_CLUSTER"] = json.dumps(unsafe_cluster)
+                self.env["TEST_BASTION"] = json.dumps(unsafe_bastion)
+                self.run_script("scripts/connect-aks-bastion.sh", success=False)
+        self.assertFalse((self.root / "bastion-call.json").exists())
+        self.assertFalse((self.root / "kubelogin-call.json").exists())
+
+    def test_bastion_accepts_arm_casing_and_premium(self):
+        self.env["TEST_CLUSTER"] = json.dumps({
+            "apiServerAccessProfile": {"enablePrivateCluster": True, "enablePrivateClusterPublicFQDN": False},
+            "disableLocalAccounts": True, "aadProfile": {"managed": True, "enableAzureRBAC": True},
+            "privateFqdn": "testlab.private.azmk8s.io",
+        })
+        self.env["TEST_BASTION"] = json.dumps({
+            "sku": {"name": "Premium"}, "enableTunneling": True, "provisioningState": "Succeeded",
+        })
+        self.run_script("scripts/connect-aks-bastion.sh")
+        call = json.loads((self.root / "bastion-call.json").read_text())
+        self.assertFalse(pathlib.Path(call["path"]).exists())
+
+    def test_bastion_cleans_up_when_credential_preparation_fails(self):
+        for credential_status, conversion_status in ((17, 0), (0, 19)):
+            with self.subTest(credentials=credential_status, conversion=conversion_status):
+                self.env["TEST_CREDENTIAL_STATUS"] = str(credential_status)
+                self.env["TEST_KUBELOGIN_STATUS"] = str(conversion_status)
+                result = self.run_script("scripts/connect-aks-bastion.sh", success=False)
+                self.assertEqual(result.returncode, credential_status or conversion_status)
+                calls = [json.loads(line) for line in (self.root / "az-calls.jsonl").read_text().splitlines()]
+                credentials = next(args for args in reversed(calls) if args[:2] == ["aks", "get-credentials"])
+                self.assertFalse(pathlib.Path(credentials[credentials.index("--file") + 1]).exists())
+                self.assertFalse((self.root / "bastion-call.json").exists())
+
+    def test_bastion_invalid_arguments_fail_before_azure(self):
+        for options in (("--port", "443"), ("--port", "65536"),
+                        ("--port", "18446744073709560059"),
+                        ("--resource-group", "partial-target"),
+                        ("--context", "bad context"),
+                        ("--resource-group", "test-rg", "--cluster-name", "testlab-aks",
+                         "--bastion-id", "/wrong/resource")):
+            with self.subTest(options=options):
+                self.run_script("scripts/connect-aks-bastion.sh", *options, success=False)
+        self.assertFalse((self.root / "bastion-call.json").exists())
+        self.assertFalse((self.root / "az-calls.jsonl").exists())
+
     def test_log_query_preserves_explicit_and_default_timespans(self):
         query = "Usage | where TimeGenerated > ago(24h)"
         for options, expected in (((), "PT1H"), (("--timespan", "P1D"), "P1D"),
@@ -369,6 +612,7 @@ with (pathlib.Path(os.environ["TEST_ROOT"]) / "mirror-calls.jsonl").open("a") as
         keys = self.root / "rendered/keys"
         keys.mkdir(parents=True)
         (keys / "aks.pub").write_text("ssh-rsa synthetic-public-key")
+        (keys / "build-vm.pub").write_text("ssh-rsa synthetic-build-public-key")
         self.run_script("scripts/deploy-foundation.sh")
         calls = [json.loads(line) for line in (self.root / "az-calls.jsonl").read_text().splitlines()]
         self.assertTrue(any(call[:3] == ["deployment", "group", "what-if"] for call in calls))
@@ -380,6 +624,47 @@ with (pathlib.Path(os.environ["TEST_ROOT"]) / "mirror-calls.jsonl").open("a") as
         self.assertEqual(sum(call[:3] == ["deployment", "group", "create"] for call in calls), 1)
         what_if = next(call for call in calls if call[:3] == ["deployment", "group", "what-if"])
         self.assertIn("sshPublicKey=ssh-rsa synthetic-public-key", what_if)
+        self.assertIn("buildVmSshPublicKey=ssh-rsa synthetic-build-public-key", what_if)
+        self.assertIn("buildVmSize=Standard_B2s", what_if)
+
+    def test_foundation_requires_separate_public_build_key(self):
+        keys = self.root / "rendered/keys"
+        keys.mkdir(parents=True)
+        (keys / "aks.pub").write_text("ssh-rsa synthetic-public-key")
+        result = self.run_script("scripts/deploy-foundation.sh", success=False)
+        self.assertIn("separate rendered/keys/build-vm.pub", result.stderr)
+        (keys / "build-vm.pub").write_text("-----BEGIN PRIVATE KEY-----")
+        self.run_script("scripts/deploy-foundation.sh", success=False)
+        calls = [json.loads(line) for line in (self.root / "az-calls.jsonl").read_text().splitlines()]
+        self.assertFalse(any(args[:3] == ["deployment", "group", "what-if"] for args in calls))
+
+    def test_build_vm_connection_uses_bastion_and_local_private_key(self):
+        keys = self.root / "rendered/keys"
+        keys.mkdir(parents=True)
+        self.run_script("scripts/connect-build-vm.sh", success=False)
+        (keys / "build-vm").write_text("synthetic-private-key")
+        self.run_script("scripts/connect-build-vm.sh")
+        call = json.loads((self.root / "build-ssh-call.json").read_text())
+        self.assertEqual(call[call.index("--ids") + 1], BASTION_ID)
+        self.assertEqual(call[call.index("--auth-type") + 1], "ssh-key")
+        self.assertEqual(call[call.index("--username") + 1], "labbuilder")
+        self.assertEqual(call[call.index("--ssh-key") + 1], str(keys / "build-vm"))
+        self.assertIn("/providers/Microsoft.Compute/virtualMachines/testlab-build",
+                      call[call.index("--target-resource-id") + 1])
+
+    def test_build_vm_size_defaults_and_rejects_invalid_settings(self):
+        for size in ("Standard_D2s_v5", "", False, None, "B2s", "Standard_B2s; echo invalid"):
+            with self.subTest(size=size):
+                settings = {**self.settings, "BuildVmSize": size}
+                (self.root / "local.settings.json").write_text(json.dumps(settings))
+                result = subprocess.run([self.shell, "-c", "source scripts/use-lab.sh || exit; lab_value BuildVmSize"],
+                                        cwd=self.root, env=self.env, text=True, capture_output=True)
+                if size == "Standard_D2s_v5":
+                    self.assertEqual(result.returncode, 0, result.stderr)
+                    self.assertEqual(result.stdout.strip(), size)
+                else:
+                    self.assertNotEqual(result.returncode, 0)
+                    self.assertIn("BuildVmSize", result.stderr)
 
     @unittest.skipUnless(shutil.which("openssl"), "OpenSSL required")
     def test_certificate_contains_hostname_and_private_key_permissions(self):

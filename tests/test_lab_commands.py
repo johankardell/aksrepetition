@@ -13,6 +13,36 @@ GUIDES = [ROOT / "README.md", ROOT / ".github/copilot-instructions.md", *sorted(
 
 
 class LabCommandsTests(unittest.TestCase):
+    def test_foundation_includes_bastion_module_and_outputs(self):
+        foundation = (ROOT / "infra/main.bicep").read_text()
+        module = re.search(r"module bastion 'bastion[.]bicep' = \{.*?\n\}", foundation, re.S)
+        self.assertIsNotNone(module)
+        self.assertIn("name: 'bastion'", module[0])
+        for parameter in ("prefix: prefix", "location: location", "vnetName: vnet.name"):
+            self.assertIn(parameter, module[0])
+        for output, value in (("bastionId", "bastionId"), ("bastionName", "bastionName"),
+                              ("bastionPublicIpId", "publicIpId")):
+            self.assertIn(f"output {output} string = bastion.outputs.{value}", foundation)
+        connector = (ROOT / "scripts/connect-aks-bastion.sh").read_text()
+        self.assertIn("-n bastion --query properties.outputs.bastionId.value", connector)
+
+    def test_service_bus_workload_roles_use_queue_scoped_builtin_definitions(self):
+        sender = "69a216fc-b8fb-44d8-bc22-1f3c2cd27a39"
+        receiver = "4f6d3b9b-027b-4f4c-9142-0e5a2a2247e0"
+        workload = (ROOT / "infra/workload-identities.bicep").read_text()
+        for resource, role, identity in (("send", sender, "api"), ("receive", receiver, "worker")):
+            assignment = re.search(
+                rf"resource {resource} .*?(?=\nresource |\noutput )", workload, re.S)
+            self.assertIsNotNone(assignment)
+            self.assertIn(f"'{role}'", assignment[0])
+            self.assertIn("scope: queue", assignment[0])
+            self.assertIn(f"principalId: {identity}.properties.principalId", assignment[0])
+        delivery = (ROOT / "ops/delivery.bicep").read_text()
+        roles = re.search(r"var dataRoles = \[(.*?)\]", delivery, re.S)
+        self.assertIsNotNone(roles)
+        self.assertEqual(re.findall(r"'([^']+)'", roles[1]), [sender, receiver])
+        self.assertIn("scope: queue", delivery)
+
     @staticmethod
     def bash_block(guide, marker):
         blocks = re.findall(r"^```bash\n(.*?)^```", (ROOT / guide).read_text(), re.M | re.S)
@@ -35,6 +65,37 @@ class LabCommandsTests(unittest.TestCase):
             for block in re.findall(r"<<'PY'[^\n]*\n(.*?)^PY$", guide.read_text(), re.M | re.S):
                 with self.subTest(guide=guide.relative_to(ROOT)):
                     compile(block, str(guide), "exec")
+
+    def test_cumulative_guides_preserve_active_bastion_kubeconfigs(self):
+        for guide in sorted((ROOT / "labs").glob("*.md"))[:11]:
+            for block in re.findall(r"^```bash\n(.*?)^```", guide.read_text(), re.M | re.S):
+                with self.subTest(guide=guide.name):
+                    self.assertNotIn("az aks get-credentials", block)
+
+    def test_bastion_tls_evidence_rejects_unverified_or_wrong_endpoints(self):
+        for guide, port in (("labs/01-baseline.md", 8443), ("labs/10-multi-region.md", 8444)):
+            block = self.bash_block(guide, "TunnelConfig=$(kubectl config view")
+            check = re.search(r'jq -e --arg fqdn .*?<<< "\$TunnelConfig"', block, re.S)[0]
+            endpoint = {
+                "server": f"https://localhost:{port}/", "tls-server-name": "test.private.azmk8s.io",
+                "certificate-authority-data": "synthetic-ca",
+            }
+            variants = [
+                (endpoint, "kubelogin", True),
+                ({**endpoint, "insecure-skip-tls-verify": True}, "kubelogin", False),
+                ({**endpoint, "tls-server-name": "localhost"}, "kubelogin", False),
+                ({**endpoint, "certificate-authority-data": ""}, "kubelogin", False),
+                ({**endpoint, "server": "https://public.example/"}, "kubelogin", False),
+                (endpoint, "other-authentication", False),
+            ]
+            for cluster, authentication, valid in variants:
+                with self.subTest(guide=guide, cluster=cluster, authentication=authentication):
+                    config = {"clusters": [{"cluster": cluster}],
+                              "users": [{"user": {"exec": {"command": authentication}}}]}
+                    script = 'fqdn=test.private.azmk8s.io\nTunnelConfig=$(cat)\n' + check
+                    result = subprocess.run(["bash", "-c", script], input=json.dumps(config),
+                                            text=True, capture_output=True)
+                    self.assertEqual(result.returncode == 0, valid, result.stderr)
 
     def test_expected_failures_preserve_strict_session_and_reject_wrong_evidence(self):
         examples = [
@@ -151,12 +212,14 @@ with pathlib.Path("calls.jsonl").open("a") as file:
                 path.chmod(0o755)
             env = dict(os.environ, PATH=f"{root}:{os.environ['PATH']}")
             result = subprocess.run(["bash", "-c", block], cwd=root, env=env,
+                                    input="/subscriptions/synthetic/resourceGroups/synthetic-rg/providers/Microsoft.Network/bastionHosts/synthetic-bastion\n",
                                     text=True, capture_output=True)
             self.assertEqual(result.returncode, 0, result.stderr)
             calls = [json.loads(line) for line in (root / "calls.jsonl").read_text().splitlines()]
             self.assertEqual([call[:2] for call in calls],
-                             [["login", "--tenant"], ["account", "set"], ["aks", "get-credentials"]])
+                             [["login", "--tenant"], ["account", "set"], ["aks", "bastion"]])
             self.assertIn("synthetic-aks", calls[-1])
+            self.assertNotIn("--admin", calls[-1])
 
     def test_upgrade_report_labels_actual_sample_population(self):
         block = self.bash_block("labs/09-upgrades.md", "ChangeStart:$changeStart")

@@ -2,8 +2,9 @@
 
 ## Repository workflow
 
-- This is a cumulative AKS refresher curriculum. Labs 1-10 progressively mutate one environment; reason about them in order. Labs 11-13 are optional specialist exercises with their own prerequisites.
-- Treat `README.md` and the relevant `labs/<nn>-*.md` as the operational source of truth. Lab command blocks assume Linux, Bash 5+, `jq`, Python 3.12+, and execution from the repository root with private connectivity/DNS to AKS and Azure endpoints. All `.sh` helpers also support execution under Zsh 5.9+; only `use-lab.sh` and `lib.sh` are intended for sourcing.
+- This is a cumulative AKS refresher curriculum. Labs 1-10 progressively mutate one environment; reason about them in order. Labs 11-14 are optional specialist exercises with their own prerequisites.
+- Treat `README.md` and the relevant `labs/<nn>-*.md` as the operational source of truth. Lab command blocks assume Linux, Bash 5+, `jq`, Python 3.12+, and execution from the repository root. Native Bastion supplies cumulative AKS API access; Azure data endpoints still require private connectivity/DNS. All `.sh` helpers also support execution under Zsh 5.9+; only `use-lab.sh`, `activate-aks-bastion.sh`, and `lib.sh` are intended for sourcing.
+- Native Bastion tunneling is the primary AKS API path for cumulative labs, with the explicit `aks-preview` exception described in lab 1. Prefer sourcing `scripts/activate-aks-bastion.sh` for the current shell; `scripts/connect-aks-bastion.sh` retains the preview command's subshell workflow. Both use user credentials, temporary kubeconfigs and verified TLS. Never overwrite an active tunnel kubeconfig with `get-credentials`; Bastion does not provide registry/database/application routing.
 - Do not execute billable deployments, destructive cleanup, fault injection, or cluster mutations to validate code. Prefer offline checks unless live execution and the target context are explicitly confirmed.
 
 ## Build and validation commands
@@ -43,7 +44,9 @@ Run offline helper regressions with `python3 -m unittest discover -s tests -v`; 
 
 ## Architecture
 
-- `infra/main.bicep` bootstraps private AKS, VNet/subnets, separate cluster/kubelet identities, ACR, Log Analytics, Key Vault, Service Bus, and federated workload identities. Focused templates introduce later capabilities.
+- `infra/main.bicep` bootstraps private AKS, VNet/subnets, Bastion, a private Ubuntu build VM, the shared firewall hub/peering, separate cluster/kubelet identities, ACR, Log Analytics, Key Vault, Service Bus, and federated workload identities. Focused templates introduce later capabilities.
+- `infra/bastion.bicep` is the foundation's `bastion` module: Standard SKU, two scale units and a public IP. `infra/build-vm.bicep` creates an Ubuntu 24.04 Standard_B2s host with a 64-GiB Standard SSD, separate SSH key, no public IP/managed-identity privileges, and Bastion-only inbound SSH. Cloud-init configures rootless Podman and lab tools; the readiness extension fails deployment on setup errors. The routed management subnet uses firewall egress from foundation; lab 3 adds only node UDR/outbound-type changes. Do not add a VPN or weaken private data endpoints.
+- Firewall creation precedes the spoke (its management route references the firewall output); shared peering follows both, and VM startup follows peering. Preserve this ordering and the `deployPeering: false` foundation call to avoid a deployment cycle. Bastion's subnet never inherits the management/node UDR. Regional foundations must set both spoke and hub prefixes and pass the separate build-VM public key.
 - `app/app.py` serves two roles in one image selected by `ROLE`: FastAPI producer and Service Bus worker. Each has its own service account, managed identity, and queue-scoped role. Deduplication is process-local before lab 8; PostgreSQL adds durable idempotency/lookup in lab 8.
 - `scripts/render-manifests.sh` resolves `k8s/base` into ignored `rendered/base`. Labs 2-3 accumulate CSI, identity, and networking changes there.
 - Lab 4 transfers the accumulated state once through `ops/initialize-gitops.sh` into primary `orders`/`orders-test` application roots. The platform root owns namespaces/RBAC; namespace-scoped Flux owns only allowed app resources.
@@ -52,7 +55,7 @@ Run offline helper regressions with `python3 -m unittest discover -s tests -v`; 
 ## Repository-specific conventions
 
 - Source `scripts/use-lab.sh` for lab state. `Lab` and `Outputs` are JSON strings; use `lab_value KEY`, `output_value KEY`, or `jq`, not object-property shell syntax. The helper validates identifiers and active subscription/tenant without switching context. Generated names come from `foundation` outputs, never guessed suffixes.
-- Script filenames use lowercase kebab-case. Execute other helpers with `bash path/name.sh --kebab-case-option value` or `zsh path/name.sh --kebab-case-option value`. Shared argument handling and validation live in `scripts/lib.sh`; executable helpers use `set -euo pipefail`, quoted paths, and explicit error reporting. Sourced helpers preserve caller shell options; keep new shell logic compatible with both Bash and Zsh.
+- Script filenames use lowercase kebab-case. Execute other helpers with `bash path/name.sh --kebab-case-option value` or `zsh path/name.sh --kebab-case-option value`. Source `use-lab.sh` and `activate-aks-bastion.sh`; `lib.sh` is the shared sourced library. Shared argument handling and validation live in `scripts/lib.sh`; executable helpers use `set -euo pipefail`, quoted paths, and explicit error reporting. Sourced helpers preserve caller shell options; keep new shell logic compatible with both Bash and Zsh.
 - Keep source manifests deployment-independent using `__UPPERCASE_TOKEN__`. Rendering must replace all tokens, fail on unresolved values, and validate the resulting Kustomize tree.
 - Keep local settings, `rendered/`, `.artifacts/`, `evidence/`, keys, certificates, and kubeconfigs uncommitted.
 - `infra/main.bicep` is an initial bootstrap snapshot. Never redeploy it over a progressed primary cluster: later labs change networking, add-ons, public access, scaling, and versions.

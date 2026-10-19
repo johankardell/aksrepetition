@@ -1,8 +1,10 @@
 # Lab 10 — Recover the business service across regions, then fail back
 
-**Customer:** a regional failure must not become an unbounded data-integrity incident. **Time:** one or two days, including replication/provisioning. **Cost:** two AKS platforms/firewalls, replicated Service Bus Premium, two PostgreSQL servers, Front Door Premium and WAF, ACR replication, private endpoints and traffic. Obtain an explicit budget/change approval before execution.
+**Customer:** a regional failure must not become an unbounded data-integrity incident. **Time:** one or two days, including replication/provisioning. **Cost:** two AKS platforms/firewalls/Bastion Standard hosts, replicated Service Bus Premium, two PostgreSQL servers, Front Door Premium and WAF, ACR replication, private endpoints and traffic. Obtain an explicit budget/change approval before execution.
 
 This capstone depends on labs 1–9. All commands run from the workspace root in Linux Bash with `jq`, `curl`, `getent`, and `psql`. Use a VNet-connected management host **in each region** or approved independently resilient private connectivity/DNS. Do not use a primary-region VM as the only recovery control point. No public AKS API, admin credentials, public database, or connection strings are introduced.
+
+Start in a **fresh primary native Bastion subshell** from lab 1. Task 2 adds an independently owned secondary Bastion and a second foreground tunnel on the same operator host, with separate ports/contexts; the original terminal merges their temporary kubeconfig paths. Both tunnel-owner terminals must remain alive for commands using both `--context` values. The primary/secondary data-plane hosts still provide regional SQL/private-endpoint checks; Bastion tunnels only each Kubernetes API. An alternate recovery workstation can establish its own secondary tunnel without the primary-region host.
 
 The Bash helpers use lowercase kebab-case filenames ending in `.sh` and accept `--kebab-case` options (for example `--registry-name`, `--host-name`, and `--base-uri`). Run helpers as `bash ./...sh`; executable permission bits are not required. `source ./scripts/use-lab.sh` supplies JSON strings `Lab` and `Outputs`, absolute repository path `Root`, and the strict `jq -er` accessors `lab_value KEY` and `output_value KEY`. Keep these shells open between tasks; on a second regional host, source the same primary settings and load the reviewed regional inventory/evidence separately. Do not enable shell tracing or record transcripts while handling tokens or private keys.
 
@@ -57,7 +59,13 @@ AppKustomization='orders'
 GitSource='flux-system'
 PrimaryContext="$(lab_value ClusterName)-primary"
 SecondaryContext="$SecondaryCluster-secondary"
-az aks get-credentials -g "$(lab_value ResourceGroup)" -n "$(lab_value ClusterName)" --context "$PrimaryContext" --overwrite-existing
+: "${KUBECONFIG:?Start a fresh primary native Bastion session for the capstone}"
+[[ "$KUBECONFIG" != *:* ]] || { printf '%s\n' 'Start with a fresh, single-cluster Bastion kubeconfig.' >&2; exit 1; }
+PrimaryTunnelConfig=$KUBECONFIG
+CurrentContext=$(kubectl config current-context)
+if [[ "$CurrentContext" != "$PrimaryContext" ]]; then
+  kubectl config rename-context "$CurrentContext" "$PrimaryContext"
+fi
 ```
 
 The signed contract names the approving person for each role, declaration time, accepted-ID evidence source, promotion/fencing gates, success criteria and abort authority. Measure RTO from declaration to verified business service, while recording the later time when all accepted work has completed. Evaluate the planned zero-loss target by matching every accepted ID **and item**, not by assuming two replication dashboards jointly prove consistency. A missing record or unknown lag is an unresolved outcome, not an inferred zero.
@@ -72,7 +80,7 @@ Select a supported version available in **both** regions, compatible with lab 9,
 
 The current `infra/main.bicep` exposes `networkPrefix` as the first two address octets. This lab uses `10.60` for the secondary spoke and `10.70` for its firewall hub; primary remains `10.40`/`10.50`. Do not replace this with an invented parameter name or reuse overlapping ranges. If the foundation parameter is renamed later, update the invocation and validate the rendered subnet ranges before deployment.
 
-Configure regional management connectivity/private DNS before accessing the secondary API. Associate the **secondary** route table/subnet and transition its outbound type; never change the primary by accidentally using its outputs.
+Configure independent regional data-plane connectivity/private DNS before SQL and private-endpoint checks; native Bastion supplies only the secondary API path. Associate the **secondary** route table/subnet and transition its outbound type; never change the primary by accidentally using its outputs.
 
 The orders DR workload uses the primary geo-replicated ACR and Service Bus, not the unrelated secondary foundation registry/namespace. Those unused resources still cost money; retain them until validation and delete only after proving no consumers. Apply labs 5/7 observability/platform guardrails through their parameterized deployment/Git paths, record omissions, and verify both clusters' supported add-ons before Fleet updates.
 
@@ -83,28 +91,29 @@ The orders DR workload uses the primary geo-replicated ACR and Service Bus, not 
 az aks get-versions -l "$(lab_value SecondaryLocation)" -o table
 az vm list-usage -l "$(lab_value SecondaryLocation)" -o table
 az vm list-skus -l "$(lab_value SecondaryLocation)" --size "$(lab_value VmSize)" --all -o table
+BuildVmSize=$(lab_value BuildVmSize)
+az vm list-skus -l "$(lab_value SecondaryLocation)" --size "$BuildVmSize" --all -o table
 az postgres flexible-server list-skus -l "$(lab_value SecondaryLocation)" -o table
 Cluster=$(az aks show -g "$(lab_value ResourceGroup)" -n "$(lab_value ClusterName)" -o json)
 KubernetesVersion=$(jq -er '.kubernetesVersion' <<< "$Cluster")
 AdminGroupId=$(jq -er '.aadProfile.adminGroupObjectIDs[0]' <<< "$Cluster")
 PublicKeyPath='./rendered/keys/aks.pub'
 SshPublicKey=$(cat "$PublicKeyPath")
+BuildSshPublicKey=$(< ./rendered/keys/build-vm.pub)
 az group create -n "$SecondaryRg" -l "$(lab_value SecondaryLocation)"
 az deployment group create -g "$SecondaryRg" -n foundation -f ./infra/main.bicep \
   -p "prefix=$SecondaryPrefix" "location=$(lab_value SecondaryLocation)" "kubernetesVersion=$KubernetesVersion" \
-  "adminGroupObjectId=$AdminGroupId" "sshPublicKey=$SshPublicKey" "vmSize=$(lab_value VmSize)" networkPrefix=10.60
+  "adminGroupObjectId=$AdminGroupId" "sshPublicKey=$SshPublicKey" "vmSize=$(lab_value VmSize)" \
+  "buildVmSize=$BuildVmSize" "buildVmSshPublicKey=$BuildSshPublicKey" networkPrefix=10.60 hubPrefix=10.70
 Secondary=$(az deployment group show -g "$SecondaryRg" -n foundation --query properties.outputs -o json)
 printf '%s\n' "$Secondary" > ./.artifacts/advanced/secondary-outputs.json
 az deployment group create -g "$SecondaryRg" -n private-endpoints -f ./infra/private-endpoints.bicep \
   -p "prefix=$SecondaryPrefix" "location=$(lab_value SecondaryLocation)" "vnetId=$(jq -er '.vnetId.value' <<< "$Secondary")" \
   "subnetId=$(jq -er '.endpointsSubnetId.value' <<< "$Secondary")" "acrId=$(jq -er '.acrId.value' <<< "$Secondary")" \
   "keyVaultId=$(jq -er '.keyVaultId.value' <<< "$Secondary")" "serviceBusId=$(jq -er '.serviceBusId.value' <<< "$Secondary")"
-az deployment group create -g "$SecondaryRg" -n egress -f ./infra/firewall.bicep \
-  -p "prefix=$SecondaryPrefix" "location=$(lab_value SecondaryLocation)" "spokeName=$SecondaryPrefix-vnet" \
-  spokeAddress=10.60.0.0/16 nodesAddress=10.60.0.0/20 hubPrefix=10.70
 ```
 
-Repeat the **route-table association and AKS outbound-type transition** from lab 3 with secondary outputs, not the primary VNet. Inspect the firewall deployment output and apply the precise node subnet route association:
+Secondary foundation includes its private build VM, firewall and management-subnet route/peering. Use that regional VM through its own Bastion for the secondary SQL/DNS checks, following README's checkout/authentication recipe; VM ID/user are in `$Secondary`. Keep a recovery workstation copy of the SSH key so primary-host loss cannot block access. The two API tunnels can still share one operator host as below. Repeat only the **node route-table association and AKS outbound-type transition** from lab 3 with secondary outputs, not the primary VNet:
 
 ```bash
 SecondaryEgress=$(az deployment group show -g "$SecondaryRg" -n egress --query properties.outputs -o json)
@@ -115,11 +124,62 @@ az aks update -g "$SecondaryRg" -n "$SecondaryCluster" --outbound-type userDefin
 az acr update -n "$(jq -er '.acrName.value' <<< "$Secondary")" --public-network-enabled false
 az keyvault update -n "$(jq -er '.keyVaultName.value' <<< "$Secondary")" --public-network-access Disabled
 az servicebus namespace update -g "$SecondaryRg" -n "$(jq -er '.serviceBusName.value' <<< "$Secondary")" --public-network-access Disabled
-az aks get-credentials -g "$SecondaryRg" -n "$SecondaryCluster" --context "$SecondaryContext" --overwrite-existing
-kubectl --context "$SecondaryContext" get nodes -o wide
 ```
 
-Configure regional management connectivity/private DNS before the final command. Secondary foundation creates a separate ACR, Key Vault and Service Bus for reproducibility. **The orders DR workload will instead use the primary geo-replicated ACR and primary geo-replicated Service Bus namespace.** The unused secondary namespace/registry incur costs; retain until the exercise is validated, then delete only after proving no consumers reference them. Never treat two unrelated Service Bus namespaces as replicas.
+The **secondary foundation already includes its own Bastion**, with two scale units and a public IP covered by the regional spending approval. Read its foundation output; do not deploy another host or attach the node UDR to its subnet:
+
+```bash
+SecondaryBastionId=$(jq -er '.bastionId.value' <<< "$Secondary")
+jq -n --arg rg "$SecondaryRg" --arg cluster "$SecondaryCluster" --arg bastion "$SecondaryBastionId" \
+  --arg context "$SecondaryContext" '{resourceGroup:$rg,clusterName:$cluster,bastionId:$bastion,context:$context}' \
+  > .artifacts/advanced/secondary-bastion-target.json
+```
+
+In a **second terminal on the same operator host**, open an independent foreground session on port 8444:
+
+```bash
+set -euo pipefail
+Target=$(< .artifacts/advanced/secondary-bastion-target.json)
+bash ./scripts/connect-aks-bastion.sh --resource-group "$(jq -er .resourceGroup <<< "$Target")" \
+  --cluster-name "$(jq -er .clusterName <<< "$Target")" --bastion-id "$(jq -er .bastionId <<< "$Target")" \
+  --context "$(jq -er .context <<< "$Target")" --port 8444
+```
+
+Inside that second tunnel's subshell, check the secondary TLS/Entra configuration and print its temporary path. Do not use `use-lab.sh`'s primary cluster name for this check:
+
+```bash
+set -euo pipefail
+Target=$(< .artifacts/advanced/secondary-bastion-target.json)
+fqdn=$(az aks show -g "$(jq -er .resourceGroup <<< "$Target")" \
+  -n "$(jq -er .clusterName <<< "$Target")" --query privateFqdn -o tsv)
+TunnelConfig=$(kubectl config view --minify --raw -o json)
+jq -e --arg fqdn "$fqdn" '
+  .clusters[0].cluster as $cluster |
+  $cluster.server == "https://localhost:8444/"
+  and $cluster["tls-server-name"] == $fqdn
+  and ($cluster["insecure-skip-tls-verify"] // false) == false
+  and ($cluster["certificate-authority-data"] | type == "string" and length > 0)
+  and .users[0].user.exec.command == "kubelogin"' <<< "$TunnelConfig"
+kubectl --request-timeout=30s get nodes -o wide
+printf '%s\n' "$KUBECONFIG"
+```
+
+Keep that owner subshell alive. In the **original primary terminal**, merge the printed exact path without copying or overwriting either file:
+
+```bash
+read -r -p 'Temporary kubeconfig path printed by the secondary tunnel on this host: ' SecondaryTunnelConfig
+[[ -r "$PrimaryTunnelConfig" && -r "$SecondaryTunnelConfig" && "$SecondaryTunnelConfig" != *:* ]] || {
+  printf '%s\n' 'Both live, single-file tunnel kubeconfigs must be readable on this same host.' >&2; exit 1;
+}
+export KUBECONFIG="$PrimaryTunnelConfig:$SecondaryTunnelConfig"
+kubectl config get-contexts
+kubectl --context "$PrimaryContext" --request-timeout=30s get nodes -o wide
+kubectl --context "$SecondaryContext" --request-timeout=30s get nodes -o wide
+```
+
+All remaining two-context Kubernetes/Flux commands use this merged view. Each file retains its own CA, private TLS hostname and distinct loopback port. On re-entry, reconnect both tunnels and merge their new paths; old temporary files are removed at session exit. A port-forward terminal on this host exports the **merged** `KUBECONFIG` value. A different host must open its own tunnels, not reuse these localhost endpoints. Keep independently resilient regional data-plane connectivity/private DNS as well.
+
+Secondary foundation creates a separate ACR, Key Vault and Service Bus for reproducibility. **The orders DR workload will instead use the primary geo-replicated ACR and primary geo-replicated Service Bus namespace.** The unused secondary namespace/registry incur costs; retain until the exercise is validated, then delete only after proving no consumers reference them. Never treat two unrelated Service Bus namespaces as replicas.
 
 Apply labs 5/7 observability and platform guardrails in the secondary through their parameterized deployment/Git paths, pointing telemetry at approved regional or central sinks. Record any omitted sensor/add-on as an explicit coverage gap. Fleet updates need supported add-ons in both regions, not merely two Ready clusters.
 
@@ -836,8 +896,8 @@ At end-of-pack teardown:
 3. Remove regional app/origin Kustomizations through their Git bootstrap sources and prune **before** deleting clusters so AKS cleans up PLS/load balancers. Delete Front Door/security policy/WAF after traffic is intentionally retired; revoke private endpoint connections.
 4. Remove Service Bus secondary replication location only after zero backlog and verified promotion state; use `namespace update --locations` with a reviewed single Primary entry. This deletes the removed region's replica data. If finishing everything, delete the namespace only as part of final foundation teardown.
 5. Keep active `$PgReturn` and any required replica/backup until retention expires. Delete stale `$Pg` / promoted `$PgReplica` only after checking no workload endpoint references them. Remove their PEs, not shared private DNS zone links still serving other databases.
-6. Remove ACR geo-replication only after all secondary digest consumers are gone; do not delete shared ACR while primary still runs. Delete secondary scoped identities/role assignments, private endpoints and the secondary RG last (`az group delete -n "$SecondaryRg"`) only after enumerating its resources and confirming the disposable boundary; retain the CLI's deletion confirmation.
-7. Follow lab 8's backup retention/extension/snapshot teardown **before** removing the primary cluster. Preserve the evidence bundle; securely delete local TLS private keys and auth material through the approved workstation process. No subscription-wide policy/Defender state is blindly reset.
+6. Remove ACR geo-replication only after all secondary digest consumers are gone; do not delete shared ACR while primary still runs. Complete secondary API-dependent cleanup, restore `export KUBECONFIG="$PrimaryTunnelConfig"` in the original terminal, and close the secondary tunnel-owner subshell. Delete secondary scoped identities/role assignments, private endpoints and the secondary RG last (`az group delete -n "$SecondaryRg"`) only after enumerating its resources and confirming the disposable boundary; this also retires its Bastion/public IP. Retain the CLI's deletion confirmation.
+7. Follow lab 8's backup retention/extension/snapshot teardown **before** removing the primary cluster. Keep the primary Bastion available through Kubernetes/Flux cleanup, then close its tunnel-owner subshell before final primary resource-group teardown retires its Bastion/public IP. Disconnecting alone leaves Bastion billing. Preserve the evidence bundle; securely delete local TLS private keys and auth material through the approved workstation process. No subscription-wide policy/Defender state is blindly reset.
 
 </details>
 

@@ -12,6 +12,8 @@
 
 ## Numbered directives
 
+Run Kubernetes/Flux commands inside the active native Bastion subshell on the private data-plane host. Extra terminals share its temporary `KUBECONFIG` as in README; reconnect before re-entry if the tunnel closed. HTTPS load reaches the internal gateway through the host's private network, not through Bastion's API tunnel.
+
 ### 1. Establish bounds and capture the baseline
 
 **Challenge:** capture the current workload, resource-metrics and pool baseline, verify quota/headroom, and confirm the cluster is ready for bounded HPA, KEDA and node-scaling experiments.

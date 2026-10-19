@@ -2,7 +2,7 @@
 
 **Level:** intermediate+. **Scenario:** security rejects connection strings and a shared application identity. Demonstrate separately authorized API/worker access and explain what actually happens during token exchange.
 
-**Prerequisite:** lab 1 healthy, no Flux reconciliation yet. Keep the private management connection and API port-forward. Run Bash at the repository root; all resource names come from `source ./scripts/use-lab.sh`. Additional cost is limited to synthetic traffic and secret operations on existing resources.
+**Prerequisite:** lab 1 healthy, no Flux reconciliation yet. Keep or restart the native Bastion session and API port-forward; run Kubernetes commands in its subshell or a same-host terminal sharing its active temporary `KUBECONFIG`. Run Bash at the repository root; all resource names come from `source ./scripts/use-lab.sh`. Additional cost is limited to synthetic traffic and secret operations on existing resources; Bastion continues billing while deployed.
 
 ## Directives
 

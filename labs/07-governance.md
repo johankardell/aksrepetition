@@ -4,6 +4,8 @@
 
 This lab is cumulative after labs 1–6. Use synthetic data. Namespace tenancy is appropriate for cooperating internal teams, **not a hard boundary for hostile tenants**. Defender pricing is subscription-scoped and incurs charges. Do not enable it in a shared subscription without the subscription owner's approval.
 
+The operator works inside lab 1's native Bastion subshell. Separate human team sessions use the same Bastion host with their own Entra credentials and scoped access; the tunnel supplies connectivity, not namespace privileges.
+
 ## 1. Establish the operator and GitOps boundaries
 
 All Git changes retain lab 4's protected `main` workflow. Stage only the indicated files, then use `advanced/publish-reviewed-change.sh`: it creates a branch/PR and waits for your normal review and merge before returning to updated `main`. It never approves or merges its own PR. If you stop the helper with a pending PR, finish that review and return to updated `main` before continuing or reconciling.
@@ -122,17 +124,28 @@ az role assignment create --assignee-object-id "$TeamAGroupObjectId" --assignee-
   --role 'Azure Kubernetes Service Cluster User Role' --scope "$ClusterId"
 az role assignment create --assignee-object-id "$TeamAGroupObjectId" --assignee-principal-type Group \
   --role 'Azure Kubernetes Service RBAC Writer' --scope "$ClusterId/namespaces/team-a"
+BastionId=$(az deployment group show -g "$(lab_value ResourceGroup)" -n bastion --query properties.outputs.bastionId.value -o tsv)
+az role assignment create --assignee-object-id "$TeamAGroupObjectId" --assignee-principal-type Group \
+  --role Reader --scope "$BastionId"
+printf 'Share this Bastion ARM ID with the team: %s\n' "$BastionId"
 ```
 
-An actual team-A member signs in on a **separate authorized management session**, gets non-admin AKS credentials and runs. Read only local settings here: `use-lab.sh` reads foundation deployment outputs, which this least-privilege team member is deliberately not authorized to retrieve. The cluster name below is the documented fixed foundation name, not a generated service suffix:
+An actual team-A member signs in on a **separate authorized workstation session** and starts a native Bastion tunnel with ordinary user credentials. Read only local settings here: `use-lab.sh` reads foundation deployment outputs, which this least-privilege team member is deliberately not authorized to retrieve. The cluster name below is the documented fixed foundation name, not a generated service suffix. Use the reviewed extensions from lab 1 and the exact Bastion ID shared by the operator:
 
 ```bash
 set -euo pipefail
 settings=$(jq -e . ./local.settings.json)
 az login --tenant "$(jq -er .TenantId <<< "$settings")"
 az account set --subscription "$(jq -er .SubscriptionId <<< "$settings")"
-az aks get-credentials -g "$(jq -er .ResourceGroup <<< "$settings")" \
-  -n "$(jq -er '.Prefix + "-aks"' <<< "$settings")" --overwrite-existing
+read -r -p 'Platform-provided Bastion ARM ID: ' BastionId
+az aks bastion tunnel -g "$(jq -er .ResourceGroup <<< "$settings")" \
+  -n "$(jq -er '.Prefix + "-aks"' <<< "$settings")" --bastion "$BastionId" --port 8445
+```
+
+Inside that new tunnel subshell, retain verified TLS as in lab 1, convert the temporary user kubeconfig and run:
+
+```bash
+set -euo pipefail
 kubelogin convert-kubeconfig -l azurecli
 kubectl auth can-i create deployments -n team-a
 ```
@@ -417,7 +430,7 @@ The evidence should attribute each denial to its own layer: the human/service-ac
 
 </details>
 
-At **final pack teardown**, remove `teams` from platform Git first and reconcile pruning; remove the lab-created team Cluster User and namespace Writer role assignments and `team-image-sources` assignment. Do not delete the namespaces while they contain customer data. Revert Defender pricing only if this exercise changed it and no other cluster depends on it; restoring the whole prior subscription pricing/extension configuration requires the subscription owner's review.
+At **final pack teardown**, remove `teams` from platform Git first and reconcile pruning; remove the lab-created team Cluster User, namespace Writer and Bastion Reader role assignments and `team-image-sources` assignment. Do not delete the namespaces while they contain customer data. Revert Defender pricing only if this exercise changed it and no other cluster depends on it; restoring the whole prior subscription pricing/extension configuration requires the subscription owner's review.
 
 ## Official references and status
 

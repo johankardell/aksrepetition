@@ -6,6 +6,8 @@
 
 The sourced `./scripts/use-lab.sh` helper supplies JSON strings `Lab` and `Outputs`, absolute repository path `Root`, and the strict `jq -er` accessors `lab_value KEY` and `output_value KEY`. Keep the original shell open between tasks, and never enable shell tracing or record transcripts while handling authentication material.
 
+Keep lab 1's native Bastion session alive for Kubernetes/Flux operations; second terminals share its exact temporary `KUBECONFIG` on the same host. The existing Bastion preview exception is for API connectivity only, not permission to enable unrelated preview GPU features. Do not overwrite the tunnel kubeconfig with fresh credentials.
+
 **Support gate.** Source review: **2026-10-01**. This exercise reviews **KAITO 0.6.0** and uses that release's `kaito.sh/v1beta1` Workspace and `phi-4-mini-instruct` preset, not an example downloaded from `main`. Microsoft's managed AI toolchain operator guide warns that the add-on typically lags upstream; it does not pin the deployed managed version to 0.6.0. Verify the actual controller image/version and supported AKS/region/SKU combination before submitting the Workspace. Public Azure regions and NVIDIA Linux GPU nodes are the path here; Windows and AMD GPU workspaces are excluded. Do not install an upstream KAITO Helm release, a second GPU operator, NAP or preview extensions over the managed add-on to repair a compatibility problem. The separate **fully managed GPU node-pool feature is preview** in the reviewed documentation and is not required here.
 
 **Envelope and data boundary.** One Workspace, one desired `Standard_NC24ads_A100_v4` node (24 vCPUs, one A100), one model replica, one CPU-only probe, five sequential measured requests, at most 64 generated tokens per request, and a four-hour allocation window including teardown. Approve current regional GPU pricing, NCads A100 v4 family quota, total regional quota, disk space and subnet capacity first. Existing orders infrastructure continues billing. `resource.count: 1` is desired capacity, **not an Azure spending cap or a guarantee against transient/orphaned allocations**. The namespace's one-GPU quota limits pod requests, not Azure node creation. Monitor pool count during reconciliation; stop and clean up if the footprint exceeds approval. Budgets are notifications, and even quota is not a monetary cap.
@@ -33,7 +35,7 @@ if [[ -e "$KaitoDir" ]]; then
   exit 1
 fi
 mkdir -p "$KaitoDir"
-az aks get-credentials -g "$(lab_value ResourceGroup)" -n "$(lab_value ClusterName)" --overwrite-existing
+: "${KUBECONFIG:?Start the native Bastion session before KAITO preflight}"
 kubelogin convert-kubeconfig -l azurecli
 kubectl config current-context
 kubectl get nodes -o wide

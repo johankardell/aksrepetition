@@ -1,0 +1,35 @@
+#cloud-config
+package_update: true
+packages:
+  - ca-certificates
+  - curl
+  - dnsutils
+  - git
+  - gnupg
+  - jq
+  - openssh-client
+  - openssl
+  - podman
+  - postgresql-client
+  - python3
+  - python3-pip
+  - python3-venv
+  - python3-yaml
+  - sudo
+  - uidmap
+  - slirp4netns
+  - fuse-overlayfs
+  - dbus-user-session
+  - unzip
+  - zsh
+write_files:
+  - path: /etc/aks-lab/build-config.json
+    permissions: '0644'
+    encoding: b64
+    content: __BUILD_CONFIG__
+  - path: /usr/local/sbin/setup-aks-build-vm
+    permissions: '0755'
+    encoding: b64
+    content: __BOOTSTRAP_SCRIPT__
+runcmd:
+  - [/usr/local/sbin/setup-aks-build-vm]

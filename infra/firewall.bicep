@@ -4,6 +4,9 @@ param spokeName string
 param spokeAddress string = '10.40.0.0/16'
 param nodesAddress string = '10.40.0.0/20'
 param hubPrefix string = '10.50'
+param managementAddress string = '10.40.16.0/24'
+@description('Foundation creates the routed spoke after this module, then establishes peering separately.')
+param deployPeering bool = true
 var firewallName = '${prefix}-fw'
 var authorityHost = uri(environment().authentication.loginEndpoint, '/')
 var loginFqdn = split(authorityHost, '/')[2]
@@ -16,16 +19,9 @@ resource hub 'Microsoft.Network/virtualNetworks@2024-05-01' = {
     subnets: [{ name: 'AzureFirewallSubnet', properties: { addressPrefix: '${hubPrefix}.0.0/26' } }]
   }
 }
-resource spoke 'Microsoft.Network/virtualNetworks@2024-05-01' existing = { name: spokeName }
-resource peerSpoke 'Microsoft.Network/virtualNetworks/virtualNetworkPeerings@2024-05-01' = {
-  parent: spoke
-  name: 'to-hub'
-  properties: { remoteVirtualNetwork: { id: hub.id }, allowVirtualNetworkAccess: true, allowForwardedTraffic: true }
-}
-resource peerHub 'Microsoft.Network/virtualNetworks/virtualNetworkPeerings@2024-05-01' = {
-  parent: hub
-  name: 'to-spoke'
-  properties: { remoteVirtualNetwork: { id: spoke.id }, allowVirtualNetworkAccess: true, allowForwardedTraffic: true }
+module peering 'vnet-peering.bicep' = if (deployPeering) {
+  name: 'network-peering'
+  params: { spokeName: spokeName, hubName: hub.name }
 }
 resource pip 'Microsoft.Network/publicIPAddresses@2024-05-01' = {
   name: '${firewallName}-pip'
@@ -58,6 +54,53 @@ resource firewall 'Microsoft.Network/azureFirewalls@2024-05-01' = {
               sourceAddresses: [nodesAddress]
               protocols: [{ protocolType: 'Https', port: 443 }]
               fqdnTags: ['AzureKubernetesService']
+            }
+          ]
+        }
+      }
+      {
+        name: 'build-management'
+        properties: {
+          priority: 300
+          action: { type: 'Allow' }
+          rules: [
+            {
+              name: 'ubuntu-packages'
+              sourceAddresses: [managementAddress]
+              protocols: [{ protocolType: 'Http', port: 80 }, { protocolType: 'Https', port: 443 }]
+              targetFqdns: ['*.ubuntu.com']
+            }
+            {
+              name: 'build-tools-and-artifacts'
+              sourceAddresses: [managementAddress]
+              protocols: [{ protocolType: 'Https', port: 443 }]
+              targetFqdns: [
+                loginFqdn
+                '*.${loginFqdn}'
+                managementFqdn
+                'graph.microsoft.com'
+                'packages.microsoft.com'
+                'github.com'
+                '*.github.com'
+                '*.githubusercontent.com'
+                '*.actions.githubusercontent.com'
+                '*.blob.${environment().suffixes.storage}'
+                'cli.github.com'
+                'get.helm.sh'
+                'dl.k8s.io'
+                'cdn.dl.k8s.io'
+                'pypi.org'
+                'files.pythonhosted.org'
+                'registry-1.docker.io'
+                'auth.docker.io'
+                'production.cloudflare.docker.com'
+                '*.cloudflarestorage.com'
+                'ghcr.io'
+                '*.azurecr.io'
+                'mcr.microsoft.com'
+                '*.data.mcr.microsoft.com'
+                'aka.ms'
+              ]
             }
           ]
         }
@@ -116,7 +159,7 @@ resource firewall 'Microsoft.Network/azureFirewalls@2024-05-01' = {
             }
             {
               name: 'ntp'
-              sourceAddresses: [nodesAddress]
+              sourceAddresses: [nodesAddress, managementAddress]
               destinationFqdns: ['ntp.ubuntu.com']
               destinationPorts: ['123']
               protocols: ['UDP']
@@ -148,3 +191,4 @@ resource routes 'Microsoft.Network/routeTables@2024-05-01' = {
 output routeTableId string = routes.id
 output firewallPrivateIp string = firewall.properties.ipConfigurations[0].properties.privateIPAddress
 output firewallPublicIp string = pip.properties.ipAddress
+output hubVnetName string = hub.name
