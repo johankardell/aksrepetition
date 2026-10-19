@@ -499,3 +499,7 @@ Source review: **2026-09-10**. Managed Prometheus, Managed Grafana Standard, Con
 - [OTel configuration and sampling](https://learn.microsoft.com/en-us/azure/azure-monitor/app/opentelemetry-configuration)
 - [Prometheus alert rule schema](https://learn.microsoft.com/en-us/azure/templates/microsoft.alertsmanagement/prometheusrulegroups)
 - [Grafana roles](https://learn.microsoft.com/en-us/azure/role-based-access-control/built-in-roles/monitor)
+
+---
+
+**Next lab:** [Lab 15 - Scaling and cost](15-scaling.md).

@@ -544,3 +544,7 @@ The local manifests adapt the documented API shape for an isolated, synthetic la
 - [AKS NVIDIA GPU prerequisites and device-plugin responsibilities](https://learn.microsoft.com/en-us/azure/aks/use-nvidia-gpu)
 - [Fully managed GPU node pools: separate preview/support boundary](https://learn.microsoft.com/en-us/azure/aks/aks-managed-gpu-nodes)
 - [Kubernetes NetworkPolicy semantics](https://kubernetes.io/docs/concepts/services-networking/network-policies/)
+
+---
+
+**Next lab (optional):** [Lab 25 - RabbitMQ storage density](25-rabbitmq-container-storage.md). This self-contained exercise uses a separate cluster; review its prerequisites and budget.

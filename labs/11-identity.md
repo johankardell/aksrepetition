@@ -264,3 +264,7 @@ After confirming ownership and scope, remove only that assignment by its display
 </details>
 
 Sources reviewed 2026-09-10: [Workload ID overview](https://learn.microsoft.com/azure/aks/workload-identity-overview), [CSI and identity](https://learn.microsoft.com/azure/aks/csi-secrets-store-identity-access), [CSI rotation](https://learn.microsoft.com/azure/aks/csi-secrets-store-configuration-options), [Service Bus Entra authorization](https://learn.microsoft.com/azure/service-bus-messaging/authenticate-application).
+
+---
+
+**Next lab:** [Lab 12 - Private networking and publishing](12-networking.md).

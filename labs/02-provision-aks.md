@@ -154,3 +154,7 @@ Keep the foundation for [lab 3](03-access-and-identity.md). Do not delete nodes,
 ## References
 
 [Bicep what-if](https://learn.microsoft.com/azure/azure-resource-manager/bicep/deploy-what-if), [deployment operations](https://learn.microsoft.com/azure/azure-resource-manager/templates/deployment-history), [AKS managed identities](https://learn.microsoft.com/azure/aks/use-managed-identity), [AKS resource groups](https://learn.microsoft.com/azure/aks/faq#why-are-two-resource-groups-created-with-aks). Verify live support and your own deployment evidence; these commands are not a certification of subscription readiness.
+
+---
+
+**Next lab:** [Lab 3 - Access and identity](03-access-and-identity.md).

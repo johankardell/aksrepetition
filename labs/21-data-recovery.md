@@ -532,3 +532,7 @@ Not by this local Disk exercise. Vault-tier Disk backups with GRS and Cross Regi
 ## Official references and status
 
 Checked **2026-09-10**: [AKS Backup support matrix](https://learn.microsoft.com/azure/backup/azure-kubernetes-service-cluster-backup-support-matrix), [backup CLI](https://learn.microsoft.com/azure/backup/azure-kubernetes-service-cluster-backup-using-cli), [restore CLI](https://learn.microsoft.com/azure/backup/azure-kubernetes-service-cluster-restore-using-cli), [backup concepts/network requirements](https://learn.microsoft.com/azure/backup/azure-kubernetes-service-cluster-backup-concept), [PostgreSQL Bicep API](https://learn.microsoft.com/azure/templates/microsoft.dbforpostgresql/2024-08-01/flexibleservers), [PostgreSQL CLI](https://learn.microsoft.com/cli/azure/postgres/flexible-server). Some introductory paragraphs in the backup CLI article lag the support matrix; this lab uses the narrower supported Disk operational path and does not claim private Files backup support.
+
+---
+
+**Next lab:** [Lab 22 - Lifecycle management](22-upgrades.md).

@@ -122,3 +122,7 @@ No foundation exists yet. Retain settings/public keys and continue to [lab 2](02
 ## References
 
 [AKS operator best practices](https://learn.microsoft.com/azure/aks/best-practices), [AKS baseline](https://learn.microsoft.com/azure/architecture/reference-architectures/containers/aks/baseline-aks), [supported versions](https://learn.microsoft.com/azure/aks/supported-kubernetes-versions), [AKS quotas](https://learn.microsoft.com/azure/aks/quotas-skus-regions), [Cost Management budgets](https://learn.microsoft.com/azure/cost-management-billing/costs/tutorial-acm-create-budgets). Discover current support and capacity at execution; no live availability or billing is certified here.
+
+---
+
+**Next lab:** [Lab 2 - Safe provisioning](02-provision-aks.md).

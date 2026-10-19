@@ -658,3 +658,7 @@ Source review: **2026-09-10**. HPA autoscaling/v2, cluster autoscaler, managed K
 - [Azure VMSS simulated eviction](https://learn.microsoft.com/en-us/cli/azure/vmss#az-vmss-simulate-eviction)
 - [NAP prerequisites and limitations](https://learn.microsoft.com/en-us/azure/aks/node-auto-provisioning)
 - [AKS Automatic](https://learn.microsoft.com/en-us/azure/aks/intro-aks-automatic)
+
+---
+
+**Next lab:** [Lab 20 - Multi-team governance](20-governance.md).

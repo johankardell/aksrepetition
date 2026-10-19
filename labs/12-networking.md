@@ -368,3 +368,7 @@ Confirm the displayed certificate is the one generated for this lab before runni
 </details>
 
 Sources reviewed 2026-09-10: [AKS firewall egress](https://learn.microsoft.com/azure/aks/limit-egress-traffic), [required outbound rules](https://learn.microsoft.com/azure/aks/outbound-rules-control-egress), [managed Gateway API](https://learn.microsoft.com/azure/aks/managed-gateway-api), [application routing Gateway API](https://learn.microsoft.com/azure/aks/app-routing-gateway-api), [Gateway TLS](https://learn.microsoft.com/azure/aks/app-routing-gateway-api-tls), [ACR Private Link](https://learn.microsoft.com/azure/container-registry/container-registry-private-link).
+
+---
+
+**Next lab:** [Lab 13 - GitOps delivery](13-gitops.md).

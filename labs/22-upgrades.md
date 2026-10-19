@@ -342,3 +342,7 @@ Only use `$Node` retained from this exercise; if it was lost, identify the incid
 ## Official references and status
 
 Checked **2026-09-10**: [upgrade AKS](https://learn.microsoft.com/azure/aks/upgrade-cluster), [planned maintenance](https://learn.microsoft.com/azure/aks/planned-maintenance), [node-image upgrade](https://learn.microsoft.com/azure/aks/node-image-upgrade), [upgrade options](https://learn.microsoft.com/azure/aks/upgrade-aks-cluster), [supported versions](https://learn.microsoft.com/azure/aks/supported-kubernetes-versions). Required commands use GA update/drain features; no preview force-upgrade, preview drain bypass or Kubernetes downgrade is part of the recovery plan.
+
+---
+
+**Next lab:** [Lab 23 - Multi-region capstone](23-multi-region.md).

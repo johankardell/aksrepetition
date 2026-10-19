@@ -203,3 +203,7 @@ If permanently leaving after beginners, follow [beginner-only teardown](../READM
 ## References
 
 [AKS troubleshooting](https://learn.microsoft.com/azure/aks/troubleshooting), [AKS lifecycle best practices](https://learn.microsoft.com/azure/aks/operator-best-practices-cluster-security), [AKS upgrades](https://learn.microsoft.com/azure/aks/upgrade-cluster), [node-image upgrades](https://learn.microsoft.com/azure/aks/node-image-upgrade), [AKS stop/start](https://learn.microsoft.com/azure/aks/start-stop-cluster). This lab inspects lifecycle choices; it does not prove an actual upgrade or a backup/restore.
+
+---
+
+**Next lab:** [Lab 10 - Enterprise baseline, beginner resume path](10-baseline.md#entry-paths). Reuse the existing foundation; do not redeploy or rerender.

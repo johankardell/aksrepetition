@@ -583,3 +583,7 @@ Sources reviewed 2026-09-23:
 - [Kubernetes taints and tolerations](https://kubernetes.io/docs/concepts/scheduling-eviction/taint-and-toleration/)
 - [Kubernetes node selectors and affinity](https://kubernetes.io/docs/concepts/scheduling-eviction/assign-pod-node/)
 - [Kubernetes NodeRestriction admission](https://kubernetes.io/docs/reference/access-authn-authz/admission-controllers/#noderestriction)
+
+---
+
+**Next lab (optional):** [Lab 27 - Progressive Kustomize practice](27-kustomize.md). This mixed-level exercise runs offline and needs no Azure resources.

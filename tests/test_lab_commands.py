@@ -40,6 +40,24 @@ class LabCommandsTests(unittest.TestCase):
                                    for heading in headings]
                         self.assertIn(unquote(url.fragment), anchors)
 
+    def test_every_lab_ends_with_next_lab_navigation(self):
+        guides = sorted((ROOT / "labs").glob("*.md"))
+        for index, guide in enumerate(guides):
+            with self.subTest(guide=guide.name):
+                text = guide.read_text().rstrip()
+                footer = text.splitlines()[-1]
+                self.assertGreater(text.rfind(footer), text.rfind("</details>"))
+                if index + 1 < len(guides):
+                    next_guide = guides[index + 1]
+                    number = int(next_guide.name[:2])
+                    prefix = "**Next lab (optional):**" if number >= 24 else "**Next lab:**"
+                    self.assertTrue(footer.startswith(f"{prefix} [Lab {number} - "))
+                    targets = re.findall(r"\]\(([^)]+)\)", footer)
+                    self.assertEqual([urlsplit(target).path for target in targets], [next_guide.name])
+                else:
+                    self.assertTrue(footer.startswith("**Course complete:**"))
+                    self.assertIn("](../README.md)", footer)
+
     def test_foundation_includes_bastion_module_and_outputs(self):
         foundation = (ROOT / "infra/main.bicep").read_text()
         module = re.search(r"module bastion 'bastion[.]bicep' = \{.*?\n\}", foundation, re.S)

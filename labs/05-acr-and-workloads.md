@@ -185,3 +185,7 @@ Stop the port-forward with Ctrl+C when pausing; disconnect the owning Bastion se
 ## References
 
 [AKS and ACR integration](https://learn.microsoft.com/azure/aks/cluster-container-registry-integration), [ACR authentication](https://learn.microsoft.com/azure/container-registry/container-registry-authentication), [image management best practices](https://learn.microsoft.com/azure/aks/operator-best-practices-container-image-management), [AKS resource management](https://learn.microsoft.com/azure/aks/developer-best-practices-resource-management). This exercise uses synthetic data and does not establish a production supply chain.
+
+---
+
+**Next lab:** [Lab 6 - Troubleshooting and lifecycle](06-troubleshooting-and-lifecycle.md).

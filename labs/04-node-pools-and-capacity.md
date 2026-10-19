@@ -142,3 +142,7 @@ There are no new resources or mutations to undo. Continue to [lab 5](05-acr-and-
 ## References
 
 [System node pools](https://learn.microsoft.com/azure/aks/use-system-pools), [resource management](https://learn.microsoft.com/azure/aks/developer-best-practices-resource-management), [Azure CNI Overlay](https://learn.microsoft.com/azure/aks/azure-cni-overlay), [storage best practices](https://learn.microsoft.com/azure/aks/operator-best-practices-storage), [AKS upgrade options](https://learn.microsoft.com/azure/aks/upgrade-cluster). Inspect the current service limits for your selected version and region rather than assuming all networking modes have the same capacity model.
+
+---
+
+**Next lab:** [Lab 5 - ACR and workloads](05-acr-and-workloads.md).

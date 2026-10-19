@@ -445,3 +445,7 @@ Source review: **2026-09-10**. Required path: supported Flux v2 APIs, stable Kub
 - [Azure Login with OIDC](https://learn.microsoft.com/en-us/azure/developer/github/connect-from-azure-openid-connect)
 - [ACR private endpoint connectivity](https://learn.microsoft.com/en-us/azure/container-registry/container-registry-private-link)
 - [GitHub self-hosted runner security](https://docs.github.com/en/actions/security-for-github-actions/security-guides/security-hardening-for-github-actions)
+
+---
+
+**Next lab:** [Lab 14 - Observability](14-observability.md).

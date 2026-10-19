@@ -941,3 +941,7 @@ When quantified business loss and recovery requirements justify two-region capac
 ## Official references and status
 
 Checked **2026-09-10**: [Service Bus Geo-Replication](https://learn.microsoft.com/azure/service-bus-messaging/service-bus-geo-replication) (non-partitioned Premium required; partitioned support preview), [GA namespace CLI](https://learn.microsoft.com/cli/azure/servicebus/namespace), [GA PostgreSQL replica CLI](https://learn.microsoft.com/cli/azure/postgres/flexible-server/replica), [Front Door private ILB origin](https://learn.microsoft.com/azure/frontdoor/standard-premium/how-to-enable-private-link-internal-load-balancer), [origin security](https://learn.microsoft.com/azure/frontdoor/origin-security), [AKS ILB/PLS restrictions](https://learn.microsoft.com/azure/aks/internal-lb), [Fleet quickstart](https://learn.microsoft.com/azure/kubernetes-fleet/quickstart-create-fleet-and-members), [Fleet update orchestration](https://learn.microsoft.com/azure/kubernetes-fleet/update-orchestration). Some Service Bus documentation examples use preview ARM schemas; this required path uses current **GA core CLI** commands and excludes partitioned preview replication. Front Door origin managed-identity authentication and Fleet preview failure tolerances are not prerequisites.
+
+---
+
+**Next lab (optional):** [Lab 24 - KAITO inference](24-kaito.md). Requires the retained primary environment; complete it before final teardown.

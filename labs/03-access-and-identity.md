@@ -185,3 +185,7 @@ Continue to [lab 4](04-node-pools-and-capacity.md) in the active VM shell, or di
 ## References
 
 [AKS access and identity](https://learn.microsoft.com/azure/aks/concepts-identity), [Azure RBAC for Kubernetes authorization](https://learn.microsoft.com/azure/aks/manage-azure-rbac), [private AKS](https://learn.microsoft.com/azure/aks/private-clusters), [Bastion native SSH](https://learn.microsoft.com/azure/bastion/connect-vm-native-client-linux). Native AKS tunneling retains the explicit preview exception; verify its supported command shape rather than copying older admin-credential examples.
+
+---
+
+**Next lab:** [Lab 4 - Node pools and capacity](04-node-pools-and-capacity.md).

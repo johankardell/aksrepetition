@@ -619,3 +619,7 @@ Sources reviewed 2026-09-23:
 - [RabbitMQ HTTP management API](https://www.rabbitmq.com/docs/http-api-reference)
 - [Kubernetes persistent volumes](https://kubernetes.io/docs/concepts/storage/persistent-volumes/)
 - [Kubernetes pod anti-affinity and node affinity](https://kubernetes.io/docs/concepts/scheduling-eviction/assign-pod-node/)
+
+---
+
+**Next lab (optional):** [Lab 26 - Confidential compute placement](26-confidential-compute.md). This self-contained exercise uses a separate cluster; review its prerequisites and budget.

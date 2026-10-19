@@ -544,3 +544,7 @@ unset Work
 - [Kubernetes declarative management with Kustomize](https://kubernetes.io/docs/tasks/manage-kubernetes-objects/kustomization/)
 - [Kustomize replacements](https://kubectl.docs.kubernetes.io/references/kustomize/kustomization/replacements/)
 - [Kustomize components](https://kubectl.docs.kubernetes.io/guides/config_management/components/)
+
+---
+
+**Course complete:** [Return to the lab index](../README.md).

@@ -330,3 +330,7 @@ The selector must be `apps`. Stop the port-forward with Ctrl+C in the terminal t
 Sources reviewed 2026-09-10: [enterprise baseline](https://learn.microsoft.com/azure/architecture/reference-architectures/containers/aks/baseline-aks), [private clusters](https://learn.microsoft.com/azure/aks/private-clusters), [Cilium](https://learn.microsoft.com/azure/aks/azure-cni-powered-by-cilium), [AKS modes](https://learn.microsoft.com/azure/aks/what-is-aks), [supported versions](https://learn.microsoft.com/azure/aks/supported-kubernetes-versions).
 
 Bastion checked **2026-10-01**: [private AKS native access](https://learn.microsoft.com/azure/bastion/bastion-connect-to-aks-private-cluster), [AKS API access patterns and limitations](https://learn.microsoft.com/azure/architecture/security/access-azure-kubernetes-service-cluster-api-server), [Bastion subnet/network requirements](https://learn.microsoft.com/azure/bastion/configuration-settings). CLI 2.90.0 with `aks-preview` 22.0.0b5 exposes the newer `bastion tunnel` group; it uses user credentials by default and preserves the original hostname with `tls-server-name`. The documented older `--admin` example is not this lab's authentication model.
+
+---
+
+**Next lab:** [Lab 11 - Identity and integration](11-identity.md).

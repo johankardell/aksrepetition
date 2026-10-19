@@ -437,3 +437,7 @@ At **final pack teardown**, remove `teams` from platform Git first and reconcile
 ## Official references and status
 
 Checked **2026-09-10**: [AKS Azure Policy](https://learn.microsoft.com/azure/aks/use-azure-policy), [built-in policies](https://learn.microsoft.com/azure/aks/policy-reference), [PSA](https://learn.microsoft.com/azure/aks/use-psa), [Azure RBAC](https://learn.microsoft.com/azure/aks/manage-azure-rbac), [Defender support](https://learn.microsoft.com/azure/defender-for-cloud/support-matrix-defender-for-containers). Required paths use GA features. The installed CLI and live policy definition are the source of truth for parameter availability; record versions in evidence.
+
+---
+
+**Next lab:** [Lab 21 - Data and recovery](21-data-recovery.md).
