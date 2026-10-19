@@ -1,8 +1,10 @@
-# Lab 8 — Recover the state, not just the pods
+# Lab 21 — Recover the state, not just the pods
+
+**Level:** advanced.
 
 **Customer:** durable order processing, shared files and a tested recovery plan. **Time:** 4–6 hours plus provisioning/backup time. **Result:** passwordless PostgreSQL, Disk/Files CSI evidence, an actual AKS Backup restore with a matching hash, and a separate PostgreSQL point-in-time restore.
 
-Required after labs 1–7. Budget for PostgreSQL General Purpose, storage, backup snapshots and restore servers. Run Bash from the repository root on a private Linux management host, with `set -euo pipefail` in each terminal. Use Azure CLI, kubectl, Flux CLI, Git, GitHub CLI, `jq`, `curl` (supporting `--fail-with-body`), `python3`, `openssl`, and `dig`/`getent`. Install PostgreSQL **17 or later client tools** (`psql`, `pg_dump`, `pg_restore`) on that host through your approved package process; `sslrootcert=system` requires a recent libpq. No PostgreSQL password or Azure token belongs in Git or a transcript; do not enable `set -x`. Solutions share a terminal unless stated otherwise. On re-entry, source `use-lab.sh`, reload the JSON outputs (`Out`, `PgOut`), signed-in administrator and database names/host, and recover saved order/hash/backup evidence before continuing.
+Required after labs 10–15 and 20. Budget for PostgreSQL General Purpose, storage, backup snapshots and restore servers. Run Bash from the repository root on a private Linux management host, with `set -euo pipefail` in each terminal. Use Azure CLI, kubectl, Flux CLI, Git, GitHub CLI, `jq`, `curl` (supporting `--fail-with-body`), `python3`, `openssl`, and `dig`/`getent`. Install PostgreSQL **17 or later client tools** (`psql`, `pg_dump`, `pg_restore`) on that host through your approved package process; `sslrootcert=system` requires a recent libpq. No PostgreSQL password or Azure token belongs in Git or a transcript; do not enable `set -x`. Solutions share a terminal unless stated otherwise. On re-entry, source `use-lab.sh`, reload the JSON outputs (`Out`, `PgOut`), signed-in administrator and database names/host, and recover saved order/hash/backup evidence before continuing.
 
 ## 1. Inspect the exact recovery support boundary
 
@@ -43,11 +45,11 @@ The inventory should include `disk.csi.azure.com` and `file.csi.azure.com`, a su
 
 ## 2. Create and privately resolve managed PostgreSQL
 
-Review the Bicep: PostgreSQL 16, General Purpose, Entra-only auth, 14-day retention, no public access. HA is disabled to bound lab cost; discuss zone-redundant HA for production separately. Geo-redundant backup is disabled because lab 10 demonstrates an explicitly provisioned cross-region replica, not an imaginary geo-restore.
+Review the Bicep: PostgreSQL 16, General Purpose, Entra-only auth, 14-day retention, no public access. HA is disabled to bound lab cost; discuss zone-redundant HA for production separately. Geo-redundant backup is disabled because lab 23 demonstrates an explicitly provisioned cross-region replica, not an imaginary geo-restore.
 
 **Challenge:** Provision the managed database and its Private Link endpoint; prove private DNS, TCP reachability and disabled public access. Explain what the lab's availability choices leave unprotected.
 
-Allow TCP 5432 to this PE address in the application's egress NetworkPolicy; also preserve DNS, Entra HTTPS, Service Bus and Key Vault allowances from lab 3. Modify the **Git source** policy, not live workloads (task 3 supplies the source update).
+Allow TCP 5432 to this PE address in the application's egress NetworkPolicy; also preserve DNS, Entra HTTPS, Service Bus and Key Vault allowances from lab 12. Modify the **Git source** policy, not live workloads (task 3 supplies the source update).
 
 <details>
 <summary>Solution</summary>
@@ -81,9 +83,9 @@ Production zone-redundant HA can reduce interruption from an instance or availab
 
 **Challenge:** Give the API read-only and worker insert/read SQL access through Workload ID, publish the database integration, and prove durability after restart. Test both identical redelivery and conflicting reuse of an ID; retain SQL uniqueness, HTTP and specific dead-letter evidence.
 
-Use object/principal IDs, not client IDs, for SQL principal mapping. Run initialization once per role pair; inspect existing mappings rather than silently remapping them. Keep the server FQDN, TLS certificate verification and container CA bundle; never add a database password secret. Preserve existing identity/Service Bus configuration and egress allowances in the authoritative lab-4 Git source. Ensure both images implement the shared PostgreSQL app contract.
+Use object/principal IDs, not client IDs, for SQL principal mapping. Run initialization once per role pair; inspect existing mappings rather than silently remapping them. Keep the server FQDN, TLS certificate verification and container CA bundle; never add a database password secret. Preserve existing identity/Service Bus configuration and egress allowances in the authoritative lab-13 Git source. Ensure both images implement the shared PostgreSQL app contract.
 
-The rollout restart below is an explicit, recorded operations action, not a replacement for the Git deployment definition. Stop other synthetic producers for the conflicting-ID test, preserve its known dead-letter message, and record the new baseline for lab 10; do not blindly replay it.
+The rollout restart below is an explicit, recorded operations action, not a replacement for the Git deployment definition. Stop other synthetic producers for the conflicting-ID test, preserve its known dead-letter message, and record the new baseline for lab 23; do not blindly replay it.
 
 <details>
 <summary>Solution</summary>
@@ -102,7 +104,7 @@ processed_orders(order_id text PRIMARY KEY, item text NOT NULL,
 
 API gets SELECT; worker gets INSERT and SELECT. The worker's `INSERT ... ON CONFLICT DO NOTHING` makes repeated deliveries of an **identical ID and item** idempotent, then it completes the Service Bus message. This is not global exactly-once delivery. Reusing an ID with a different item is explicitly rejected by this application's worker and sent to the dead-letter queue; it does not update the stored item.
 
-The lab-4 production source is `gitops/clusters/primary/apps/orders` and its reconciler is `orders` in `flux-system`. Generate and add a database patch plus a private-IP egress policy using the existing lab-4 helper:
+The lab-13 production source is `gitops/clusters/primary/apps/orders` and its reconciler is `orders` in `flux-system`. Generate and add a database patch plus a private-IP egress policy using the existing lab-13 helper:
 
 ```bash
 Addresses=$(getent ahostsv4 "$PgHost")
@@ -139,19 +141,19 @@ This adds the following values to the production source deployments' `env` lists
 git diff
 git add ./gitops/clusters/primary/apps/orders
 bash ./advanced/publish-reviewed-change.sh --message "Use private passwordless durable order storage"
-# Use the exact Flux names recorded in lab 7.
+# Use the exact Flux names recorded in lab 20.
 flux reconcile kustomization "$AppKustomization" -n "$FluxNamespace" --with-source
 kubectl rollout status deployment/order-api -n orders --timeout=300s
 kubectl rollout status deployment/order-worker -n orders --timeout=300s
 # KEDA may keep an empty-queue worker at zero; submit an order before requiring worker logs.
 ```
 
-If the lab-4 source lives outside `k8s`, stage its actual path instead. Expected: no token acquisition/permission errors. Diagnose in order: federation → DNS/route → TCP/TLS → Entra principal mapping → SQL grants. The Azure PostgreSQL resource Contributor role does **not** grant SQL SELECT.
+If the lab-13 source lives outside `k8s`, stage its actual path instead. Expected: no token acquisition/permission errors. Diagnose in order: federation → DNS/route → TCP/TLS → Entra principal mapping → SQL grants. The Azure PostgreSQL resource Contributor role does **not** grant SQL SELECT.
 
-Post an order through the lab-3 TLS application URL, wait for durable processing, restart the worker and verify it still exists:
+Post an order through the lab-12 TLS application URL, wait for durable processing, restart the worker and verify it still exists:
 
 ```bash
-read -r -p 'Lab 3 HTTPS application base URL: ' AppUrl
+read -r -p 'Lab 12 HTTPS application base URL: ' AppUrl
 AppUrl=${AppUrl%/}
 [[ "$AppUrl" == https://* ]] || { printf '%s\n' 'Use the trusted HTTPS application URL.' >&2; exit 1; }
 Order=$(jq -nc --arg id "durable-$(openssl rand -hex 16)" '{id:$id,item:"blue-widget"}')
@@ -184,7 +186,7 @@ curl --fail-with-body --silent --show-error "$AppUrl/orders" --header 'Content-T
 curl --fail-with-body --silent --show-error "$AppUrl/orders/$OrderId"
 ```
 
-A rollout restart is an explicit, recorded operations action; it does not replace the Git deployment definition. Confirm SQL count for this ID is exactly one using the read-only `psql` checks below. The pre-lab-8 in-memory deduplication was not durable.
+A rollout restart is an explicit, recorded operations action; it does not replace the Git deployment definition. Confirm SQL count for this ID is exactly one using the read-only `psql` checks below. The pre-lab-21 in-memory deduplication was not durable.
 
 Now exercise the conflicting-ID business rule without mistaking HTTP acceptance for processing:
 
@@ -207,7 +209,7 @@ jq -e --argjson expected "$Order" '.id == $expected.id and .item == $expected.it
 kubectl logs -n orders deployment/order-worker --tail=100
 ```
 
-Expected: worker evidence of `Order ID already exists with a different item`, an `InvalidOrder` dead-letter reason, unchanged original data, and one SQL row for the ID. Inspect the specific message with lab 6's dead-letter tooling: a namespace-wide count alone cannot identify its reason. Before database integration, GET returned 503 by design, not an ingress failure. After integration, POST 202 still means **accepted into the queue**, not durably processed.
+Expected: worker evidence of `Order ID already exists with a different item`, an `InvalidOrder` dead-letter reason, unchanged original data, and one SQL row for the ID. Inspect the specific message with lab 15's dead-letter tooling: a namespace-wide count alone cannot identify its reason. Before database integration, GET returned 503 by design, not an ingress failure. After integration, POST 202 still means **accepted into the queue**, not durably processed.
 
 Use a fresh Entra token to run these read-only checks on the authoritative database. Keep tokens out of transcripts; a subshell-local `EXIT` trap removes the token after use:
 
@@ -237,7 +239,7 @@ The API has SELECT only and the worker INSERT/SELECT. The count result contains 
 
 **Challenge:** Write and hash a Disk-backed ledger, demonstrate a shared file across Files readers, then induce a scheduling failure and recover without changing the data hash. Explain access modes, topology and reclaim behavior.
 
-Platform owns `storage`, its namespace and StorageClass; do not grant those rights to `orders-reconciler`. Persist the owner CR in the primary platform root's explicit resource list using lab 7's export-and-register recipe. Add private `files.yaml` to the storage source through Git, keeping `files-lab` outside backup scope.
+Platform owns `storage`, its namespace and StorageClass; do not grant those rights to `orders-reconciler`. Persist the owner CR in the primary platform root's explicit resource list using lab 20's export-and-register recipe. Add private `files.yaml` to the storage source through Git, keeping `files-lab` outside backup scope.
 
 Dynamic private Files provisioning needs CSI identity permissions on the VNet/private DNS and Azure control-plane egress. Scope missing rights to **Private DNS Zone Contributor on the required zone** and **Network Contributor on the subnet**; never open storage to the internet. `Delete` reclaim is permitted only for this disposable synthetic exercise; production needs a deliberate reclaim/cleanup decision. Suspend only `storage` for the controlled selector fault, then resume its owner; never falsify PV zone affinity to pretend a disk moved.
 
@@ -260,7 +262,7 @@ ExpectedHash=${HashOutput%% *}
 printf '%s\n' "$ExpectedHash" > .artifacts/advanced/ledger.sha256
 ```
 
-Persist `storage` using lab 7's export-and-register recipe, substituting `storage`/`storage.yaml` for `teams`/`teams.yaml`. Add the exported CR to `gitops/clusters/primary/kustomization.yaml`'s explicit resource list and commit/reconcile the platform root. The namespace and StorageClass need platform ownership; do not grant those rights to `orders-reconciler`.
+Persist `storage` using lab 20's export-and-register recipe, substituting `storage`/`storage.yaml` for `teams`/`teams.yaml`. Add the exported CR to `gitops/clusters/primary/kustomization.yaml`'s explicit resource list and commit/reconcile the platform root. The namespace and StorageClass need platform ownership; do not grant those rights to `orders-reconciler`.
 
 Add `files.yaml` to `advanced/storage/kustomization.yaml`'s resources list, render with `kubectl kustomize ./advanced/storage`, commit/push/reconcile `storage`. Dynamic private Files provisioning requires CSI identity permissions on the VNet/private DNS and allowed Azure control-plane egress. The core identity has network rights on the foundation VNet; if private DNS creation is denied, assign **Private DNS Zone Contributor on the required zone resource** and **Network Contributor on the subnet**, rather than opening storage to the internet. Inspect `kubectl describe pvc -n files-lab shared-files` and CSI controller logs for the exact failed resource.
 
@@ -307,7 +309,7 @@ Hash must still match. A real zone-mismatch incident similarly requires a schedu
 
 **Challenge:** Configure the supported AKS Backup path end to end and prove extension health, Trusted Access, protection state and namespace scope. Retain instance/policy identity and scoped permission evidence.
 
-Review the helper before running: it creates private metadata storage/PE/DNS, a vault/policy, extension, dedicated snapshot RG, scoped permissions and validation. It never disables storage firewalls or uses AKS admin credentials. Protect **only storage-lab**; private PostgreSQL and `files-lab` are excluded. Backing up every namespace also copies Kubernetes secrets into metadata storage; protect and minimize that access. Amend lab-3 firewall rules narrowly, retaining existing rules.
+Review the helper before running: it creates private metadata storage/PE/DNS, a vault/policy, extension, dedicated snapshot RG, scoped permissions and validation. It never disables storage firewalls or uses AKS admin credentials. Protect **only storage-lab**; private PostgreSQL and `files-lab` are excluded. Backing up every namespace also copies Kubernetes secrets into metadata storage; protect and minimize that access. Amend lab-12 firewall rules narrowly, retaining existing rules.
 
 <details>
 <summary>Solution</summary>
@@ -325,7 +327,7 @@ Vault="$(lab_value Prefix)-backup"
 az dataprotection backup-instance show -g "$(lab_value ResourceGroup)" --vault-name "$Vault" -n "$(jq -er '.name' <<< "$Instance")"
 ```
 
-Wait for extension healthy and protection configured. If roles are newly assigned, allow propagation then repeat the helper's `validate-for-backup` and instance-create lines, not the entire provisioning sequence. A denied endpoint usually means missing private DNS or firewall egress; Microsoft documents required extension FQDNs in the backup concept article. Amend lab-3 firewall policy narrowly, retaining existing rules.
+Wait for extension healthy and protection configured. If roles are newly assigned, allow propagation then repeat the helper's `validate-for-backup` and instance-create lines, not the entire provisioning sequence. A denied endpoint usually means missing private DNS or firewall egress; Microsoft documents required extension FQDNs in the backup concept article. Amend lab-12 firewall policy narrowly, retaining existing rules.
 
 The default policy is obtained from the installed CLI, not hard-coded with an obsolete backup rule name. Verify its scope is **only storage-lab**. Backing up every namespace also copies Kubernetes secrets into metadata storage; protect and minimize that access. Private PostgreSQL and `files-lab` are not part of this backup.
 
@@ -386,11 +388,11 @@ kubectl exec -n storage-restored deployment/ledger -- cat /data/ledger.csv
 
 ## 7. Exercise PostgreSQL's independent point-in-time recovery
 
-**Challenge:** Recover the original order into a new managed server after synthetic row deletion. Prove the restored ID/item over verified TLS, measure recovery duration/time gap, and restore the original application's synthetic data for lab 10.
+**Challenge:** Recover the original order into a new managed server after synthetic row deletion. Prove the restored ID/item over verified TLS, measure recovery duration/time gap, and restore the original application's synthetic data for lab 23.
 
 AKS Backup does not cover this database. Save the expected order first, stop new producers **before deletion**, and use only synthetic data. Wait until the restore window includes the selected UTC instant. Keep tokens out of transcripts and remove them from the environment after use.
 
-PITR creates a **new server**, not an in-place undo. Verify PE/DNS, roles, configuration and Entra administrator separately; inspect an existing administrator instead of duplicating it. **Do not repoint production** in this exercise: preserve original `$Pg` and repopulate it for lab 10. A real cutover requires fenced writers and an authoritative Git endpoint change; never create two unintentionally writable production databases.
+PITR creates a **new server**, not an in-place undo. Verify PE/DNS, roles, configuration and Entra administrator separately; inspect an existing administrator instead of duplicating it. **Do not repoint production** in this exercise: preserve original `$Pg` and repopulate it for lab 23. A real cutover requires fenced writers and an authoritative Git endpoint change; never create two unintentionally writable production databases.
 
 <details>
 <summary>Solution</summary>
@@ -442,7 +444,7 @@ getent ahostsv4 "$PGHOST"
 )
 ```
 
-Expected durable order reappears with its original item. Record actual recovery duration and the gap between restored time and incident time. For this lab, **do not repoint production**: preserve original `$Pg` for lab 10. Re-submit the saved synthetic order through the application to repopulate the original server, then verify GET and SQL again. In a real cutover, fence all writers, compare records, update the authoritative Git endpoint and recycle connections; never run two independent writable databases unintentionally.
+Expected durable order reappears with its original item. Record actual recovery duration and the gap between restored time and incident time. For this lab, **do not repoint production**: preserve original `$Pg` for lab 23. Re-submit the saved synthetic order through the application to repopulate the original server, then verify GET and SQL again. In a real cutover, fence all writers, compare records, update the authoritative Git endpoint and recycle connections; never run two independent writable databases unintentionally.
 
 ```bash
 SavedOrder=$(< .artifacts/advanced/durable-order.json)
@@ -472,7 +474,7 @@ The helper checks the ID **and item** with a bounded wait; the SQL result on `$P
 
 Deliver: SQL principal grants, durable dedup count after restart, private DNS/TLS evidence, Disk/Files mode comparison, failed scheduling event, completed backup/restore job IDs, matching hash, PITR restored rows, measured recovery duration and known missing state.
 
-Keep primary PostgreSQL, app SQL integration and backup protection for labs 9–10. Delete the disposable restore server only after retaining its evidence.
+Keep primary PostgreSQL, app SQL integration and backup protection for labs 22–23. Delete the disposable restore server only after retaining its evidence.
 
 **Final-teardown guardrails (not cleanup for this task):** Stop protection/delete backup data, respect jobs/soft-delete/immutability requirements, then remove extension/Trusted Access, metadata storage/PE and snapshot RG **only after no recovery points depend on them**. Keep the extension and cluster running while operational backup expiry/deletion needs them. Remove `storage` through Git and prune; check orphan PVs/disks/shares before deleting their node RG. Never purge a shared vault or defeat retention to make an RG delete succeed.
 
@@ -523,7 +525,7 @@ Managed backups, patching and HA reduce toil, but schema changes, SQL privilege 
 <details>
 <summary>Model answer: Are we protected from a region loss?</summary>
 
-Not by this local Disk exercise. Vault-tier Disk backups with GRS and Cross Region Restore can restore in the supported paired region; they need a prepared target, staging storage, permissions and validated recovery points. Private Files needs its own supported protection strategy. Lab 10 replicates the managed state separately.
+Not by this local Disk exercise. Vault-tier Disk backups with GRS and Cross Region Restore can restore in the supported paired region; they need a prepared target, staging storage, permissions and validated recovery points. Private Files needs its own supported protection strategy. Lab 23 replicates the managed state separately.
 
 </details>
 

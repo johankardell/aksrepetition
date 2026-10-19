@@ -1,10 +1,10 @@
-# Lab 3 - Private dependencies, controlled egress and Gateway API
+# Lab 12 - Private dependencies, controlled egress and Gateway API
 
-**Level:** advanced intermediate. **Scenario:** publish an internal business API over HTTPS while restricting dependencies and application traffic.
+**Level:** intermediate. **Scenario:** publish an internal business API over HTTPS while restricting dependencies and application traffic.
 
-**Prerequisite:** labs 1-2 complete, a working private management path, Azure CLI 2.86+, and approved Azure Firewall/Private Link charges. The required ingress is internal; global/public publishing is reserved for lab 10.
+**Prerequisite:** labs 10-11 complete, a working private management path, Azure CLI 2.86+, and approved Azure Firewall/Private Link charges. The required ingress is internal; global/public publishing is reserved for lab 23.
 
-Run Kubernetes commands through lab 1's active native Bastion session. This lab also requires the approved private data-plane/build host: a Bastion API tunnel does not make workstation `dig`, `curl`, `podman` or secret operations reach private endpoints. Run the mixed command blocks on that private host with its own Bastion API session. Supply routing/DNS before disabling public access; keep Bastion's subnet off the AKS node route table.
+Run Kubernetes commands through lab 10's active native Bastion session. This lab also requires the approved private data-plane/build host: a Bastion API tunnel does not make workstation `dig`, `curl`, `podman` or secret operations reach private endpoints. Run the mixed command blocks on that private host with its own Bastion API session. Supply routing/DNS before disabling public access; keep Bastion's subnet off the AKS node route table.
 
 ## Directives
 
@@ -106,7 +106,7 @@ Expected: managed standard-channel Gateway API CRDs and the `approuting-istio` G
 <details>
 <summary>Solution</summary>
 
-Set `Hostname` in local settings to a lab DNS name. An owned public domain is not needed for this internal self-signed exercise; lab 10 needs one for trusted public TLS.
+Set `Hostname` in local settings to a lab DNS name. An owned public domain is not needed for this internal self-signed exercise; lab 23 needs one for trusted public TLS.
 
 ```bash
 source ./scripts/use-lab.sh
@@ -135,7 +135,7 @@ Expect private IP, accepted/resolved route references, and HTTP 200 with success
 
 Platform team owns the Gateway and TLS lifecycle; app team owns its HTTPRoute. A namespace selector limits who can attach routes. For production, use a trusted certificate and the supported Key Vault/DNS integration or explicit certificate synchronization; do not keep PEM private keys in source control.
 
-**Prepare the ordinary HTTPS client path used by labs 5-10.** `curl --resolve --cacert` does not configure DNS or persistent client trust, so complete both before calling the later load scripts. Create a private zone at the exact application hostname to avoid shadowing unrelated parent-domain records:
+**Prepare the ordinary HTTPS client path used by labs 14-15 and 20-23.** `curl --resolve --cacert` does not configure DNS or persistent client trust, so complete both before calling the later load scripts. Create a private zone at the exact application hostname to avoid shadowing unrelated parent-domain records:
 
 ```bash
 az network private-dns zone create -g "$(lab_value ResourceGroup)" -n "$(lab_value Hostname)" -o none
@@ -178,7 +178,7 @@ Trust only the certificate you just generated in this disposable lab; never add 
 
 ### 5. Apply least-required application network access
 
-**Task:** apply default-deny application policies with only the required allowances. Prove approved order processing, denied worker-to-API traffic and denied unapproved public HTTPS, attributing each denial to the right control. Keep the extended rendered base for lab 4.
+**Task:** apply default-deny application policies with only the required allowances. Prove approved order processing, denied worker-to-API traffic and denied unapproved public HTTPS, attributing each denial to the right control. Keep the extended rendered base for lab 13.
 
 <details>
 <summary>Solution</summary>
@@ -340,12 +340,12 @@ No. Gateway routing/TLS, WAF, identity-aware API controls and east-west mesh pol
 
 ## Cleanup and references
 
-Remove the host override, keep private endpoints/firewall/policies/gateway and private ingress DNS for later labs, and protect/delete local certificate files at final teardown. At final teardown, remove only the lab-specific CA bundle after comparing the saved fingerprint with the generated certificate; do not modify system roots. Do not redeploy the lab 1 bootstrap template over these network changes. Keep `rendered/base` intact for Flux adoption and `rendered/gateway.yaml` as the separately owned platform ingress configuration.
+Remove the host override, keep private endpoints/firewall/policies/gateway and private ingress DNS for later labs, and protect/delete local certificate files at final teardown. At final teardown, remove only the lab-specific CA bundle after comparing the saved fingerprint with the generated certificate; do not modify system roots. Do not redeploy the lab 10 bootstrap template over these network changes. Keep `rendered/base` intact for Flux adoption and `rendered/gateway.yaml` as the separately owned platform ingress configuration.
 
 <details>
 <summary>Solution: cumulative and final certificate cleanup</summary>
 
-For the handoff to lab 4, complete task 6's recovery and demonstrate a fresh processed order over ordinary HTTPS. Leave the private DNS zone and local CA bundle in place because later load scripts need them.
+For the handoff to lab 13, complete task 6's recovery and demonstrate a fresh processed order over ordinary HTTPS. Leave the private DNS zone and local CA bundle in place because later load scripts need them.
 
 Only at **final teardown**, on the Linux host where you created the bundle, inspect the certificate and compare its exact saved fingerprint before removing the local trust files:
 

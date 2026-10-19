@@ -1,10 +1,10 @@
-# Lab 13 - Isolate confidential and ordinary workloads on one AKS cluster
+# Lab 26 - Isolate confidential and ordinary workloads on one AKS cluster
 
 **Level:** advanced. **Type:** optional and self-contained. **Scenario:** a customer needs hardware-protected memory for a small set of sensitive services but does not want ordinary workloads consuming more expensive confidential-compute capacity.
 
 **Outcome:** one AKS cluster with ordinary and AMD SEV-SNP Confidential VM (CVM) user pools, a mixed workload, and evidence that scheduling controls deliberately steer sensitive pods to CVMs and ordinary pods away from them. The lab separates a node-pool trust boundary from confidential containers and shows how to scale confidential capacity down when it is not required.
 
-This lab creates a dedicated resource group and cluster. It does not use or modify the cumulative labs 1-10 environment.
+This lab creates a dedicated resource group and cluster. It does not use or modify the cumulative labs 10-15 and 20-23 environment.
 
 Use a separate Bash session outside the cumulative Bastion subshell, on a host with private routing/DNS to this lab's dedicated cluster. The working-folder kubeconfig below is isolated from both your default config and any active cumulative tunnel; that tunnel does not reach this independent API.
 

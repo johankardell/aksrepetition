@@ -6,7 +6,7 @@ destination=$Root/gitops/clusters/primary
 [[ ! -f $destination/apps/orders/kustomization.yaml ]] || die 'GitOps is already initialized. Edit its sources; do not recopy rendered manifests.'
 source=$Root/rendered/base
 for required in kustomization.yaml secret-provider.yaml identity-patch.yaml policies.yaml; do
-    [[ -f $source/$required ]] || die "Missing accumulated rendered base file $required. Complete labs 2 and 3; do not rerender."
+    [[ -f $source/$required ]] || die "Missing accumulated rendered base file $required. Complete labs 11 and 12; do not rerender."
 done
 kubectl kustomize "$source" >/dev/null
 delivery=$(az deployment group show -g "$(lab_value ResourceGroup)" -n delivery --query properties.outputs -o json)

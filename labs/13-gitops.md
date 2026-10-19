@@ -1,8 +1,10 @@
-# Lab 4 — Deliver releases through GitOps and a private supply chain
+# Lab 13 — Deliver releases through GitOps and a private supply chain
+
+**Level:** intermediate.
 
 **Scenario.** A platform team needs auditable releases without giving an image-build pipeline Kubernetes access. Build once, promote an immutable digest, reconcile desired state, and recover through Git.
 
-**Prerequisites/re-entry.** Complete labs 1–3. Use Bash at the repository root on the VNet-connected Linux management host. `local.settings.json`, `foundation`, private DNS, HTTPS application access and working Workload ID must exist. Install the supported Flux CLI, GitHub CLI, Git, Azure CLI, jq, kubectl, kubelogin, dig, getent, OpenSSL and curl on that host; a **separate operator-provisioned Linux runner** needs rootless Podman with SBOM and digest-file support, Bash, jq and Azure CLI. Podman commands below run on a Linux host with private ACR connectivity; they need not run on the management host. Re-export the lab 3 CA bundle variables in each new terminal before ordinary HTTPS calls. An existing private GitHub repository, permission to configure its environments/runners, and a protected `main` branch are required. No command here creates a GitHub repository.
+**Prerequisites/re-entry.** Complete labs 10–12. Use Bash at the repository root on the VNet-connected Linux management host. `local.settings.json`, `foundation`, private DNS, HTTPS application access and working Workload ID must exist. Install the supported Flux CLI, GitHub CLI, Git, Azure CLI, jq, kubectl, kubelogin, dig, getent, OpenSSL and curl on that host; a **separate operator-provisioned Linux runner** needs rootless Podman with SBOM and digest-file support, Bash, jq and Azure CLI. Podman commands below run on a Linux host with private ACR connectivity; they need not run on the management host. Re-export the lab 12 CA bundle variables in each new terminal before ordinary HTTPS calls. An existing private GitHub repository, permission to configure its environments/runners, and a protected `main` branch are required. No command here creates a GitHub repository.
 
 **Ownership/path.** CI → Entra OIDC → ACR private endpoint writes images only. Flux → HTTPS Git with a repository credential pulls manifests; kubelet → ACR with its existing pull identity fetches images. GitHub OIDC is **not** authentication from Flux to a private Git repository. Platform bootstrap reconciles `gitops/clusters/primary`; the **`orders` Kustomization in `flux-system`** reconciles `gitops/clusters/primary/apps/orders`. `orders-test` uses its own namespace, queue and two managed identities. It is still the same cluster and Service Bus namespace, not a production isolation boundary.
 
@@ -156,9 +158,9 @@ Expect `order-app` and the source, kustomize, helm and notification controllers 
 
 **Challenge:** adopt the accumulated application configuration into namespace-scoped GitOps, retain the primary identity/CSI behavior, and create test desired state with its own identities and queue through review.
 
-**Constraints:** initialization is one-shot. Do not rerun `render-manifests.sh` or commit runtime secrets/settings. Namespaces and reconciler roles belong to the platform root; application reconcilers cannot write namespaces, CRDs or cluster roles. Primary CSI retains SecretProviderClass access, not Kubernetes Secret access; test identities have no Key Vault role. Repair missing Lab 2 prerequisites instead of widening permissions.
+**Constraints:** initialization is one-shot. Do not rerun `render-manifests.sh` or commit runtime secrets/settings. Namespaces and reconciler roles belong to the platform root; application reconcilers cannot write namespaces, CRDs or cluster roles. Primary CSI retains SecretProviderClass access, not Kubernetes Secret access; test identities have no Key Vault role. Repair missing Lab 11 prerequisites instead of widening permissions.
 
-Gateway/TLS remain **manually managed by the Lab 3 platform operator**, outside application Flux: `rendered/gateway.yaml` contains Namespace `gateway-system`, Gateway `gateway-system/orders-gateway` with GatewayClass `approuting-istio`, and HTTPRoute `orders` in namespace `orders`. The copied policy permits `gateway-system` to reach API port 8080. Do not copy that cross-namespace manifest into an app Kustomization or apply a namespace override to it; do not copy locally generated TLS private keys into Git. Preserve the platform manifest/inputs and its explicit owner for later gateway updates.
+Gateway/TLS remain **manually managed by the Lab 12 platform operator**, outside application Flux: `rendered/gateway.yaml` contains Namespace `gateway-system`, Gateway `gateway-system/orders-gateway` with GatewayClass `approuting-istio`, and HTTPRoute `orders` in namespace `orders`. The copied policy permits `gateway-system` to reach API port 8080. Do not copy that cross-namespace manifest into an app Kustomization or apply a namespace override to it; do not copy locally generated TLS private keys into Git. Preserve the platform manifest/inputs and its explicit owner for later gateway updates.
 
 **Exit evidence:** retain the reviewed adoption diff, rendered primary/test manifests and identity/queue comparison. Verify primary CSI/policy resources remain, test CSI references are absent, and verify `/config-version` after adoption in directive 6.
 
@@ -166,7 +168,7 @@ Gateway/TLS remain **manually managed by the Lab 3 platform operator**, outside 
 <summary>Solution</summary>
 
 ```bash
-# Preserve the accumulated lab 2 identity and lab 3 policy additions.
+# Preserve the accumulated lab 11 identity and lab 12 policy additions.
 ls ./rendered/base
 kubectl kustomize ./rendered/base
 bash ./ops/initialize-gitops.sh
@@ -186,9 +188,9 @@ git pull --ff-only
 
 `orders-test` has test identity client IDs and `QUEUE_NAME=orders-test`; `orders` keeps its original identities/queue. The initialization script copies application/network sources, not runtime secrets or local settings.
 
-The **accumulated** rendered base is the adoption contract. **Do not run `render-manifests.sh` again here**: that would lose Lab 2's identity and Lab 3's policy additions. Initialization copies the complete accumulated directory, including `secret-provider.yaml`, `identity-patch.yaml`, `policies.yaml` and their Kustomize entries. It then removes only the Namespace resource reference from each app Kustomization because Namespace reconciliation belongs to the platform root (the copied Namespace file remains an unreferenced snapshot).
+The **accumulated** rendered base is the adoption contract. **Do not run `render-manifests.sh` again here**: that would lose Lab 11's identity and Lab 12's policy additions. Initialization copies the complete accumulated directory, including `secret-provider.yaml`, `identity-patch.yaml`, `policies.yaml` and their Kustomize entries. It then removes only the Namespace resource reference from each app Kustomization because Namespace reconciliation belongs to the platform root (the copied Namespace file remains an unreferenced snapshot).
 
-The primary retains the CSI mount; its reconciler Role permits `secretproviderclasses`, not Kubernetes Secret access. `/config-version` continues rereading the synthetic `/mnt/secrets-store/lab-version`; verify it after adoption. The test copy deliberately removes the CSI resource/patch references and files: test identities have no Key Vault role. Lab 2 must already have created `lab-version` and enabled the CSI provider; repair those prerequisites instead of opening Key Vault access.
+The primary retains the CSI mount; its reconciler Role permits `secretproviderclasses`, not Kubernetes Secret access. `/config-version` continues rereading the synthetic `/mnt/secrets-store/lab-version`; verify it after adoption. The test copy deliberately removes the CSI resource/patch references and files: test identities have no Key Vault role. Lab 11 must already have created `lab-version` and enabled the CSI provider; repair those prerequisites instead of opening Key Vault access.
 
 </details>
 
@@ -242,7 +244,7 @@ The source reconciliation after replacing the Secret verifies the read-only cred
 
 **Challenge:** exercise the test release, then promote the identical digest through a reviewed PR without rebuilding. Verify primary rollout and the retained CSI-backed configuration endpoint.
 
-**Constraints:** the designated reviewer must approve/merge through the organization's workflow. Stop the test port-forward when finished. Before Lab 8, GET order lookup returns 503 by design; do not treat enqueue acceptance as durable business completion.
+**Constraints:** the designated reviewer must approve/merge through the organization's workflow. Stop the test port-forward when finished. Before Lab 21, GET order lookup returns 503 by design; do not treat enqueue acceptance as durable business completion.
 
 **Exit evidence:** retain test request results and processed synthetic IDs, the promotion PR, both primary image references and the current synthetic `/config-version` value.
 
@@ -280,7 +282,7 @@ kubectl -n orders exec deployment/order-api -c api -- python -c \
   "import urllib.request; print(urllib.request.urlopen('http://127.0.0.1:8080/config-version').read().decode())"
 ```
 
-**Evidence:** test requests return 202, test worker logs processed synthetic IDs, both primary deployments use the same verified digest, and primary `/config-version` still returns the current synthetic Key Vault value from Lab 2. Before Lab 8, GET order lookup returns 503 by design; a 202 only proves enqueue acceptance, not durable business completion.
+**Evidence:** test requests return 202, test worker logs processed synthetic IDs, both primary deployments use the same verified digest, and primary `/config-version` still returns the current synthetic Key Vault value from Lab 11. Before Lab 21, GET order lookup returns 503 by design; a 202 only proves enqueue acceptance, not durable business completion.
 
 </details>
 
@@ -288,14 +290,14 @@ kubectl -n orders exec deployment/order-api -c api -- python -c \
 
 **Challenge:** demonstrate reconciliation of live drift, inject a nonexistent digest into test through review, distinguish the resulting failure from registry connectivity/RBAC errors, and recover through another reviewed change.
 
-**Constraints:** replica drift is permitted only before Lab 6 gives HPA ownership. Inject the bad image only into `orders-test`, with explicit reviewer approval. For emergency changes suspend only the affected child, audit the change, repair Git and resume; never leave reconciliation suspended as the final state.
+**Constraints:** replica drift is permitted only before Lab 15 gives HPA ownership. Inject the bad image only into `orders-test`, with explicit reviewer approval. For emergency changes suspend only the affected child, audit the change, repair Git and resume; never leave reconciliation suspended as the final state.
 
 **Exit evidence:** record drift before/after reconciliation, the faulty and recovery Git revisions, pod/events and Ready conditions, and a successful recovered rollout. A working endpoint alone is not rollout evidence.
 
 <details>
 <summary>Solution</summary>
 
-Before Lab 6 adds autoscalers, manually scaling is a harmless drift test:
+Before Lab 15 adds autoscalers, manually scaling is a harmless drift test:
 
 ```bash
 kubectl -n orders scale deployment/order-api --replicas=3
@@ -303,7 +305,7 @@ flux reconcile kustomization orders
 kubectl -n orders get deployment order-api
 ```
 
-**Expected:** returns to the Git replica count (normally two). After HPA owns replicas in Lab 6, do **not** use replicas to test Flux drift.
+**Expected:** returns to the Git replica count (normally two). After HPA owns replicas in Lab 15, do **not** use replicas to test Flux drift.
 
 Make an intentionally nonexistent digest only in **test**, through a reviewed change:
 
@@ -368,7 +370,7 @@ Record both Git revisions and Ready conditions. For a real incident, suspend onl
 
 **Challenge:** produce a handover of release state, ownership and remaining billable resources; distinguish a mid-course handover from final teardown.
 
-**Constraints:** keep primary GitOps/workloads for labs 5–10. Stop ephemeral runner capacity after builds while preserving its registration/security process. Test replicas consume capacity. Final teardown must occur only at course end while the private API remains reachable; do not prune `orders` mid-course. Suspending Flux neither stops workloads nor removes charges.
+**Constraints:** keep primary GitOps/workloads for labs 14–15 and 20–23. Stop ephemeral runner capacity after builds while preserving its registration/security process. Test replicas consume capacity. Final teardown must occur only at course end while the private API remains reachable; do not prune `orders` mid-course. Suspending Flux neither stops workloads nor removes charges.
 
 **Exit evidence:** capture reconciler revisions/readiness, primary/test workload state, registry inventory, runner disposition, named platform/application owners and the ordered final-cleanup plan.
 
@@ -382,7 +384,7 @@ kubectl -n orders-test get deployments,services
 az acr repository show-tags --name "$(lab_value AcrName)" --repository order-app -o table
 ```
 
-Keep the primary GitOps controller/workloads for labs 5–10. Stop ephemeral runner capacity after builds, preserving its registration/security process rather than leaving a privileged shared machine idle. Test resources may be retained for later promotion; their replicas consume real capacity.
+Keep the primary GitOps controller/workloads for labs 14–15 and 20–23. Stop ephemeral runner capacity after builds, preserving its registration/security process rather than leaving a privileged shared machine idle. Test resources may be retained for later promotion; their replicas consume real capacity.
 
 For **final teardown only**, remove child Kustomizations from the platform Git root and merge; wait for pruning, then uninstall Flux with `flux uninstall --namespace=flux-system` while the private API is reachable. Revoke the runtime Git credential, delete runner registrations/environment federation, and follow root resource-group cleanup. **Suspending Flux does not stop workloads or remove charges.** Do not prune the `orders` namespace mid-course; later labs depend on its identities, policies and data.
 

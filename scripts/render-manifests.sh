@@ -20,4 +20,4 @@ for file in source.glob("*.yaml"):
     (destination / file.name).write_text(text)
 PY
 kubectl kustomize "$destination" >/dev/null
-printf 'Rendered base to %s. Apply only before Flux takes ownership in lab 4.\n' "$destination"
+printf 'Rendered base to %s. Apply only before Flux takes ownership in lab 13.\n' "$destination"

@@ -1,14 +1,16 @@
-# Lab 7 — Govern a shared platform without confusing the boundaries
+# Lab 20 — Govern a shared platform without confusing the boundaries
+
+**Level:** advanced.
 
 **Customer:** two internal teams need delegated delivery, not cluster administration. **Time:** 2–3 hours, including asynchronous policy evaluation. **Result:** attributed authorization, admission and quota denials; a narrow exception with an expiry; Defender coverage evidence.
 
-This lab is cumulative after labs 1–6. Use synthetic data. Namespace tenancy is appropriate for cooperating internal teams, **not a hard boundary for hostile tenants**. Defender pricing is subscription-scoped and incurs charges. Do not enable it in a shared subscription without the subscription owner's approval.
+This lab is cumulative after labs 10–15. Use synthetic data. Namespace tenancy is appropriate for cooperating internal teams, **not a hard boundary for hostile tenants**. Defender pricing is subscription-scoped and incurs charges. Do not enable it in a shared subscription without the subscription owner's approval.
 
-The operator works inside lab 1's native Bastion subshell. Separate human team sessions use the same Bastion host with their own Entra credentials and scoped access; the tunnel supplies connectivity, not namespace privileges.
+The operator works inside lab 10's native Bastion subshell. Separate human team sessions use the same Bastion host with their own Entra credentials and scoped access; the tunnel supplies connectivity, not namespace privileges.
 
 ## 1. Establish the operator and GitOps boundaries
 
-All Git changes retain lab 4's protected `main` workflow. Stage only the indicated files, then use `advanced/publish-reviewed-change.sh`: it creates a branch/PR and waits for your normal review and merge before returning to updated `main`. It never approves or merges its own PR. If you stop the helper with a pending PR, finish that review and return to updated `main` before continuing or reconciling.
+All Git changes retain lab 13's protected `main` workflow. Stage only the indicated files, then use `advanced/publish-reviewed-change.sh`: it creates a branch/PR and waits for your normal review and merge before returning to updated `main`. It never approves or merges its own PR. If you stop the helper with a pending PR, finish that review and return to updated `main` before continuing or reconciling.
 
 Run Bash from the repository root on the VNet-connected Linux management host with Azure CLI, kubectl, kubelogin, Flux CLI, Git, GitHub CLI, `jq`, and `python3`. Use `set -euo pipefail` in every terminal; the solutions share one session unless explicitly separated. You need AKS Azure RBAC Cluster Admin for platform onboarding, Contributor on AKS, Resource Policy Contributor for assignments/exemptions, and permission to assign Azure roles. Team users do not need these privileges. Expected denials are captured and checked explicitly without globally disabling failure handling.
 
@@ -28,7 +30,7 @@ flux get kustomizations -A
 flux get sources git -A
 ```
 
-Record the current context and Git revision. Identify the existing application's Flux Kustomization and GitRepository from lab 4:
+Record the current context and Git revision. Identify the existing application's Flux Kustomization and GitRepository from lab 13:
 
 ```bash
 # Set these to the names printed above, NOT to a guessed cluster name.
@@ -37,15 +39,15 @@ GitSource=flux-system
 FluxNamespace=flux-system
 ```
 
-If lab 4 used different names, substitute them in every later lab. `$GitSource` must be the source whose checkout contains `advanced`. Keep platform scope separate: the app reconciler must not acquire permission to create namespaces or ClusterRoles. The following `teams` and `storage` platform Kustomizations use the **existing trusted platform Flux controller**, not the application's restricted service account. A platform repository is preferable in production.
+If lab 13 used different names, substitute them in every later lab. `$GitSource` must be the source whose checkout contains `advanced`. Keep platform scope separate: the app reconciler must not acquire permission to create namespaces or ClusterRoles. The following `teams` and `storage` platform Kustomizations use the **existing trusted platform Flux controller**, not the application's restricted service account. A platform repository is preferable in production.
 
 </details>
 
 ## 2. Review and reconcile the team guardrails
 
 1. Read `advanced/governance/teams.yaml`. It includes two namespaces, restricted PSA, zero load-balancer quota, bounded compute/storage, LimitRanges, same-namespace traffic, and DNS-only external egress.
-2. Pin the three PSA version labels to the current Kubernetes **minor** for predictable policy changes. Upgrade these labels deliberately in lab 9; leaving the version unspecified tracks the API server's policy version.
-3. Publish this folder to the existing lab-4 Git remote. Do not create a new repository.
+2. Pin the three PSA version labels to the current Kubernetes **minor** for predictable policy changes. Upgrade these labels deliberately in lab 22; leaving the version unspecified tracks the API server's policy version.
+3. Publish this folder to the existing lab-13 Git remote. Do not create a new repository.
 
 Persist the platform-owned reconciliation in the existing bootstrap path, and prove the team guardrails are Ready at the reviewed Git SHA. Do not put namespace creation under the application service account.
 
@@ -78,7 +80,7 @@ kubectl get ns team-a team-b --show-labels
 kubectl get quota,limitrange,networkpolicy -n team-a
 ```
 
-Persist the `teams` Flux CR in the platform bootstrap path used in lab 4 so it is reconstructable. The `flux create` command is a **bootstrap control-plane action**, not an alternative source of workload configuration.
+Persist the `teams` Flux CR in the platform bootstrap path used in lab 13 so it is reconstructable. The `flux create` command is a **bootstrap control-plane action**, not an alternative source of workload configuration.
 
 The primary platform root has an explicit resource list; copying a file without registering it does not reconcile it. Export and register this child without changing `orders`' namespace-scoped service account:
 
@@ -130,7 +132,7 @@ az role assignment create --assignee-object-id "$TeamAGroupObjectId" --assignee-
 printf 'Share this Bastion ARM ID with the team: %s\n' "$BastionId"
 ```
 
-An actual team-A member signs in on a **separate authorized workstation session** and starts a native Bastion tunnel with ordinary user credentials. Read only local settings here: `use-lab.sh` reads foundation deployment outputs, which this least-privilege team member is deliberately not authorized to retrieve. The cluster name below is the documented fixed foundation name, not a generated service suffix. Use the reviewed extensions from lab 1 and the exact Bastion ID shared by the operator:
+An actual team-A member signs in on a **separate authorized workstation session** and starts a native Bastion tunnel with ordinary user credentials. Read only local settings here: `use-lab.sh` reads foundation deployment outputs, which this least-privilege team member is deliberately not authorized to retrieve. The cluster name below is the documented fixed foundation name, not a generated service suffix. Use the reviewed extensions from lab 10 and the exact Bastion ID shared by the operator:
 
 ```bash
 set -euo pipefail
@@ -142,7 +144,7 @@ az aks bastion tunnel -g "$(jq -er .ResourceGroup <<< "$settings")" \
   -n "$(jq -er '.Prefix + "-aks"' <<< "$settings")" --bastion "$BastionId" --port 8445
 ```
 
-Inside that new tunnel subshell, retain verified TLS as in lab 1, convert the temporary user kubeconfig and run:
+Inside that new tunnel subshell, retain verified TLS as in lab 10, convert the temporary user kubeconfig and run:
 
 ```bash
 set -euo pipefail

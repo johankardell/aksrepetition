@@ -48,7 +48,7 @@ class BuildVmTests(unittest.TestCase):
         self.assertIn("managementAddress: '${networkPrefix}.16.0/24'", foundation)
         self.assertIn("hubName: egress.outputs.hubVnetName", foundation)
         self.assertIn("dependsOn: [peering]", foundation)
-        guide = (ROOT / "labs/10-multi-region.md").read_text()
+        guide = (ROOT / "labs/23-multi-region.md").read_text()
         self.assertIn("networkPrefix=10.60 hubPrefix=10.70", guide)
         self.assertIn('"buildVmSshPublicKey=$BuildSshPublicKey"', guide)
         firewall = (ROOT / "infra/firewall.bicep").read_text()

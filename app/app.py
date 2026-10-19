@@ -72,7 +72,7 @@ def persist_order(order, seen):
             if existing[0] != order.item:
                 raise ValueError("Order ID already exists with a different item")
             return result is not None
-    # Before lab 8 this is deliberately process-local, not durable exactly-once processing.
+    # Before lab 21 this is deliberately process-local, not durable exactly-once processing.
     if order.id in seen:
         if seen[order.id] != order.item:
             raise ValueError("Order ID already exists with a different item")
@@ -147,7 +147,7 @@ def submit(order: Order):
 @api.get("/orders/{order_id}")
 def get_order(order_id: str):
     if not os.getenv("POSTGRES_HOST"):
-        raise HTTPException(503, "Durable order lookup is enabled in lab 8")
+        raise HTTPException(503, "Durable order lookup is enabled in lab 21")
     with database() as connection:
         row = connection.execute(
             "SELECT order_id,item,processed_at FROM processed_orders WHERE order_id=%s",

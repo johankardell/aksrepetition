@@ -1,8 +1,10 @@
-# Lab 9 — Maintain AKS while measuring the business effect
+# Lab 22 — Maintain AKS while measuring the business effect
+
+**Level:** advanced.
 
 **Customer:** regular lifecycle work without promising zero disruption. **Time:** 3–5 hours with a supported target available. **Result:** a real blocked drain and repair, a supported Kubernetes upgrade, a node-image update, and measured traffic/transaction evidence.
 
-Prerequisites: labs 1–8, last successful backup and PostgreSQL restore test, spare vCPU/subnet quota for surge, and an approved change window. A customer SLO is not an AKS control-plane SLA. Run Bash from the repository root on the private Linux management host with Azure CLI, kubectl, Flux CLI, Git, GitHub CLI, `jq`, and the Linux HTTP/database tools from lab 8. Start each terminal with `set -euo pipefail`; session variables do not transfer between terminals. Use Contributor on AKS plus scoped node administration, not admin kubeconfig.
+Prerequisites: labs 10–15 and 20–21, last successful backup and PostgreSQL restore test, spare vCPU/subnet quota for surge, and an approved change window. A customer SLO is not an AKS control-plane SLA. Run Bash from the repository root on the private Linux management host with Azure CLI, kubectl, Flux CLI, Git, GitHub CLI, `jq`, and the Linux HTTP/database tools from lab 21. Start each terminal with `set -euo pipefail`; session variables do not transfer between terminals. Use Contributor on AKS plus scoped node administration, not admin kubeconfig.
 
 ## 1. Build a specific go/no-go record
 
@@ -48,7 +50,7 @@ jq -e --arg target "$Target" 'index($target) != null' <<< "$Allowed" > /dev/null
 
 If the list is empty, **defer the Kubernetes-version portion** until a supported update exists; node-image-only work does not prove a Kubernetes upgrade. Do not downgrade or provision an unsupported release to manufacture an exercise.
 
-Review the target release notes, Kubernetes API removals, AzureLinux3 support, CSI/Backup extension compatibility, Cilium/network policies, Flux, KEDA, gateway, monitoring and Defender. `kubectl api-resources` tells you served APIs, not whether clients still call deprecated endpoints. Review API-server audit logs from lab 5, API deprecation insights/upgrade checks, and every CRD/webhook vendor's supported matrix. Save this decision with owner and date.
+Review the target release notes, Kubernetes API removals, AzureLinux3 support, CSI/Backup extension compatibility, Cilium/network policies, Flux, KEDA, gateway, monitoring and Defender. `kubectl api-resources` tells you served APIs, not whether clients still call deprecated endpoints. Review API-server audit logs from lab 14, API deprecation insights/upgrade checks, and every CRD/webhook vendor's supported matrix. Save this decision with owner and date.
 
 ```bash
 kubectl api-resources -o wide > .artifacts/advanced/served-apis.txt
@@ -158,15 +160,15 @@ Use two Bash terminals on the management host. In terminal A:
 ```bash
 set -euo pipefail
 source ./scripts/use-lab.sh
-read -r -p 'Lab 3 HTTPS application base URL: ' AppUrl
+read -r -p 'Lab 12 HTTPS application base URL: ' AppUrl
 AppUrl=${AppUrl%/}
 [[ "$AppUrl" == https://* ]] || { printf '%s\n' 'Use the trusted HTTPS application URL.' >&2; exit 1; }
-[[ -r "$Root/rendered/certs/lab-ca-bundle.pem" ]] || { printf '%s\n' 'Restore the approved lab-3 CA bundle on this host first.' >&2; exit 1; }
+[[ -r "$Root/rendered/certs/lab-ca-bundle.pem" ]] || { printf '%s\n' 'Restore the approved lab-12 CA bundle on this host first.' >&2; exit 1; }
 export SSL_CERT_FILE="$Root/rendered/certs/lab-ca-bundle.pem" CURL_CA_BUNDLE="$Root/rendered/certs/lab-ca-bundle.pem"
 bash ./advanced/measure-orders.sh --base-uri "$AppUrl" --seconds 3600 --output-path .artifacts/advanced/upgrade-traffic.json
 ```
 
-The helper measures sequential readiness HTTP status and latency, waiting one second after each probe; slow requests or the ten-second request timeout reduce the sampling frequency. It is **not** a full order SLI. In addition, create a synthetic order immediately before and after each operation and check GET plus worker/database evidence as in lab 8. Record retry outcomes separately; retrying should not hide failed requests in the SLI. Agree the lab objective first, for example ≥99% successful probes and no loss of accepted test orders; use the customer's actual SLO for a real change.
+The helper measures sequential readiness HTTP status and latency, waiting one second after each probe; slow requests or the ten-second request timeout reduce the sampling frequency. It is **not** a full order SLI. In addition, create a synthetic order immediately before and after each operation and check GET plus worker/database evidence as in lab 21. Record retry outcomes separately; retrying should not hide failed requests in the SLI. Agree the lab objective first, for example ≥99% successful probes and no loss of accepted test orders; use the customer's actual SLO for a real change.
 
 In terminal B, save your target and start the supported control-plane upgrade, then node pools one at a time:
 
@@ -225,7 +227,7 @@ kubectl get events -A --field-selector type=Warning
 
 If the version upgrade already installed the newest node image, image-only may be a no-op. Record that honestly and schedule a subsequent image release to demonstrate an actual image replacement. Do not claim changed nodes from a command's exit code alone.
 
-Update the authoritative foundation **deployment parameters** to `$Target` and pool maintenance settings before future IaC deployment. Do not reapply an old version from lab 1. Revisit pinned PSA minor labels in team Git configuration only after testing new requirements. Preserve SHA and version/image evidence.
+Update the authoritative foundation **deployment parameters** to `$Target` and pool maintenance settings before future IaC deployment. Do not reapply an old version from lab 10. Revisit pinned PSA minor labels in team Git configuration only after testing new requirements. Preserve SHA and version/image evidence.
 
 After the last maintenance operation, record the change end in terminal B. When terminal A finishes, calculate availability over its actual sample population and report that population's timestamps separately from the change window:
 
@@ -251,18 +253,18 @@ This summary covers the entire probe run, including baseline/recovery observatio
 
 For example, 10 failed observations out of 1,000 means 99% sampled readiness availability; it says nothing by itself about the durability of accepted orders. This is an illustrative calculation, not a measured lab result. Pair the actual sample count and time range with accepted/processed/missing order IDs, latency and retries, and compare against the objective agreed before the change.
 
-Persist the chosen `KubernetesVersion` in local deployment settings without committing those settings. In the owned infrastructure definition, retain the current post-lab networking/add-ons as well as `maxSurge`, `drainTimeoutInMinutes` and `nodeSoakDurationInMinutes`; do not use the old foundation as a rollback. Update all three pinned PSA version labels in `advanced/governance/teams.yaml` to the tested target minor using lab 7's reviewed Git workflow, then reconcile `teams` and record its applied SHA.
+Persist the chosen `KubernetesVersion` in local deployment settings without committing those settings. In the owned infrastructure definition, retain the current post-lab networking/add-ons as well as `maxSurge`, `drainTimeoutInMinutes` and `nodeSoakDurationInMinutes`; do not use the old foundation as a rollback. Update all three pinned PSA version labels in `advanced/governance/teams.yaml` to the tested target minor using lab 20's reviewed Git workflow, then reconcile `teams` and record its applied SHA.
 
 </details>
 
 ## 6. Practice application rollback; choose cluster recovery honestly
 
-**Task:** roll back a reviewed, schema-compatible application-only release through Git and re-promote the known-good release for lab 10. Explain a replacement-cluster recovery path without a Kubernetes downgrade or two active database writers. If no safe release exists, complete lab 4's rollback exercise first.
+**Task:** roll back a reviewed, schema-compatible application-only release through Git and re-promote the known-good release for lab 23. Explain a replacement-cluster recovery path without a Kubernetes downgrade or two active database writers. If no safe release exists, complete lab 13's rollback exercise first.
 
 <details>
 <summary>Solution</summary>
 
-In the lab-4 Git repository, revert the known **application** release commit from that lab, not the database migration or platform upgrade:
+In the lab-13 Git repository, revert the known **application** release commit from that lab, not the database migration or platform upgrade:
 
 ```bash
 git log --oneline -12
@@ -275,7 +277,7 @@ flux reconcile kustomization "$AppKustomization" -n "$FluxNamespace" --with-sour
 kubectl rollout status deployment/order-api -n orders --timeout=600s
 ```
 
-Check schema backward compatibility before reverting code. If there is no safe app-only release to revert, use the lab-4 tested release rollback exercise first; **do not** revert the lab-8 integration arbitrarily. Verify an accepted order after rollback, then re-promote the approved known-good release through Git for lab 10.
+Check schema backward compatibility before reverting code. If there is no safe app-only release to revert, use the lab-13 tested release rollback exercise first; **do not** revert the lab-21 integration arbitrarily. Verify an accepted order after rollback, then re-promote the approved known-good release through Git for lab 23.
 
 AKS Kubernetes downgrade is not supported. If cluster repair is unsuitable, use **blue/green cluster replacement**: provision a supported cluster and networking, configure identities and private DNS, restore required CSI data into a supported target, reconcile Git at a verified compatible SHA, run read/write checks while traffic is fenced, then change routing. Managed PostgreSQL/Service Bus remain external; do not clone them into two writers accidentally. Retain the old cluster until rollback criteria expire, but do not keep an unsupported cluster as the normal escape route.
 
@@ -315,7 +317,7 @@ Evaluate Premium tier/LTS support and application compatibility against your mai
 
 </details>
 
-Remove the incident namespace if any step stopped early and uncordon only the node recorded in `$Node`. Keep upgraded versions, PostgreSQL, backup, application and telemetry for lab 10. Restore the previous auto-upgrade channel **only when it has a single agreed owner**; lab 10 uses Fleet and must not compete with autonomous updates. Remove no pools, PVCs, identities or regional resources in this lab.
+Remove the incident namespace if any step stopped early and uncordon only the node recorded in `$Node`. Keep upgraded versions, PostgreSQL, backup, application and telemetry for lab 23. Restore the previous auto-upgrade channel **only when it has a single agreed owner**; lab 23 uses Fleet and must not compete with autonomous updates. Remove no pools, PVCs, identities or regional resources in this lab.
 
 <details>
 <summary>Solution: close the change and remove incident state</summary>

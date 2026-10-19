@@ -1,8 +1,8 @@
-# Lab 2 - Identity, Azure integration and live secret rotation
+# Lab 11 - Identity, Azure integration and live secret rotation
 
-**Level:** intermediate+. **Scenario:** security rejects connection strings and a shared application identity. Demonstrate separately authorized API/worker access and explain what actually happens during token exchange.
+**Level:** intermediate. **Scenario:** security rejects connection strings and a shared application identity. Demonstrate separately authorized API/worker access and explain what actually happens during token exchange.
 
-**Prerequisite:** lab 1 healthy, no Flux reconciliation yet. Keep or restart the native Bastion session and API port-forward; run Kubernetes commands in its subshell or a same-host terminal sharing its active temporary `KUBECONFIG`. Run Bash at the repository root; all resource names come from `source ./scripts/use-lab.sh`. Additional cost is limited to synthetic traffic and secret operations on existing resources; Bastion continues billing while deployed.
+**Prerequisite:** lab 10 healthy, no Flux reconciliation yet. Keep or restart the native Bastion session and API port-forward; run Kubernetes commands in its subshell or a same-host terminal sharing its active temporary `KUBECONFIG`. Run Bash at the repository root; all resource names come from `source ./scripts/use-lab.sh`. Additional cost is limited to synthetic traffic and secret operations on existing resources; Bastion continues billing while deployed.
 
 ## Directives
 
@@ -238,13 +238,13 @@ The federated subject and issuer restrict which service account can exchange a t
 <details>
 <summary>Model answer: Is in-memory duplicate detection reliable?</summary>
 
-Only inside one current worker process. Restart-safe idempotency is introduced with durable storage in lab 8.
+Only inside one current worker process. Restart-safe idempotency is introduced with durable storage in lab 21.
 
 </details>
 
 ## Cleanup and references
 
-Restore the federation subject, leave CSI resources mounted, and retain `version-two` for later labs. Keep the extended `rendered/base` directory: lab 4 adopts it into Flux. **Do not rerun the base renderer after extending it**, because its initial kustomization would replace these additions. Remove the human Secrets Officer role at final cleanup or when a governed operator takes over.
+Restore the federation subject, leave CSI resources mounted, and retain `version-two` for later labs. Keep the extended `rendered/base` directory: lab 13 adopts it into Flux. **Do not rerun the base renderer after extending it**, because its initial kustomization would replace these additions. Remove the human Secrets Officer role at final cleanup or when a governed operator takes over.
 
 <details>
 <summary>Solution: cumulative cleanup</summary>

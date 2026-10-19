@@ -29,7 +29,7 @@ class OptionalLabsTests(unittest.TestCase):
         )
 
     def test_resource_group_gate_rejects_reuse_and_azure_errors(self):
-        for guide in ("12-rabbitmq-container-storage.md", "13-confidential-compute.md"):
+        for guide in ("25-rabbitmq-container-storage.md", "26-confidential-compute.md"):
             block = bash_block(guide, "GroupExists=$(az group exists")
             guard = block[block.index("GroupExists=$("):block.index("\nprintf 'SubscriptionId=")]
             for exists, status in (("false", "0"), ("true", "0"), ("", "22"), ("false", "22")):
@@ -41,15 +41,15 @@ class OptionalLabsTests(unittest.TestCase):
                     self.assertEqual(result.returncode == 0, exists == "false" and status == "0")
 
     def test_confidential_creation_uses_create_taint_flag_and_one_node_ceiling(self):
-        create = bash_block("13-confidential-compute.md", "az aks create ")
+        create = bash_block("26-confidential-compute.md", "az aks create ")
         self.assertIn("--nodepool-taints CriticalAddonsOnly=true:NoSchedule", create)
         self.assertNotIn("--node-taints ", create)
-        guide = (ROOT / "labs/13-confidential-compute.md").read_text()
+        guide = (ROOT / "labs/26-confidential-compute.md").read_text()
         self.assertEqual(re.findall(r"--min-count (\d+) --max-count (\d+)", guide),
                          [("0", "1"), ("0", "1")])
 
     def test_manual_cvm_recovery_only_runs_after_autoscaler_timeout(self):
-        block = bash_block("13-confidential-compute.md",
+        block = bash_block("26-confidential-compute.md",
                            'if [[ "$ScaleFromZeroReady" == false ]]')
         mocks = 'az() { printf "az %s\\n" "$*"; }\nkubectl() { printf "kubectl %s\\n" "$*"; }\n'
         for ready in ("true", "false"):
@@ -66,7 +66,7 @@ class OptionalLabsTests(unittest.TestCase):
                     self.assertEqual(len(result.stdout.splitlines()), 3)
 
     def test_cvm_cleanup_handles_missing_and_manually_scaled_pools(self):
-        block = bash_block("13-confidential-compute.md", "CvmPool=$(jq")
+        block = bash_block("26-confidential-compute.md", "CvmPool=$(jq")
         mocks = """
 az() {
   if [[ "$*" == "aks nodepool list "* ]]; then
@@ -100,7 +100,7 @@ kubectl() { printf 'kubectl %s\\n' "$*"; }
                 self.assertNotIn("resource list", result.stdout)
 
     def test_rabbitmq_publishes_five_messages_and_preserves_pipeline_failures(self):
-        guide = "12-rabbitmq-container-storage.md"
+        guide = "25-rabbitmq-container-storage.md"
         baseline = bash_block(guide, "rabbit_api() {")
         local = bash_block(guide, "RabbitUser=$(kubectl get secret rabbit-local-default-user")
         function = baseline[baseline.index("rabbit_api() {"):baseline.index("\nrabbit_api /api/")]
@@ -159,7 +159,7 @@ curl() {
                             self.assertLessEqual(arguments.count("CALL\n"), 2)
 
     def test_baseline_cleanup_waits_only_for_remaining_pods(self):
-        block = bash_block("12-rabbitmq-container-storage.md",
+        block = bash_block("25-rabbitmq-container-storage.md",
                            'mapfile -t BaselinePvcs < "$Work/baseline-pvcs.txt"')
         mocks = """
 az() { printf 'node-rg\\n'; }

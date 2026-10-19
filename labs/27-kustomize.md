@@ -1,10 +1,10 @@
-# Lab 14 - Build progressively with Kustomize
+# Lab 27 - Build progressively with Kustomize
 
 **Level:** beginner to advanced. **Type:** optional and self-contained. **Scenario:** a platform team wants one reusable application base, environment-specific behavior without copied manifests, and optional production controls that can be composed across workloads.
 
 **Outcome:** a Kustomize base, development and production overlays, a reusable production-safety component, generated configuration, image and replica transformations, targeted patches, replacements, and a repeatable offline verification workflow.
 
-This lab does not use or modify the cumulative labs 1-10 environment. It renders manifests locally and does not require an AKS cluster or Azure resources.
+This lab does not use or modify the cumulative labs 10-15 and 20-23 environment. It renders manifests locally and does not require an AKS cluster or Azure resources.
 
 ## Prerequisites and working folder
 

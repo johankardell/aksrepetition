@@ -6,6 +6,7 @@ import shutil
 import subprocess
 import tempfile
 import unittest
+from urllib.parse import unquote, urlsplit
 
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
@@ -13,6 +14,32 @@ GUIDES = [ROOT / "README.md", ROOT / ".github/copilot-instructions.md", *sorted(
 
 
 class LabCommandsTests(unittest.TestCase):
+    def test_curriculum_inventory_and_navigation(self):
+        guides = sorted((ROOT / "labs").glob("*.md"))
+        expected = [*range(1, 7), *range(10, 16), *range(20, 28)]
+        self.assertEqual([int(guide.name[:2]) for guide in guides], expected)
+        readme = (ROOT / "README.md").read_text()
+        for guide in guides:
+            with self.subTest(guide=guide.name):
+                number = int(guide.name[:2])
+                self.assertRegex(guide.read_text().splitlines()[0], rf"^# Lab {number} [—-] ")
+                self.assertIn(f"](labs/{guide.name})", readme)
+
+    def test_local_guide_links_and_fragments_resolve(self):
+        for guide in GUIDES:
+            for target in re.findall(r"\[[^\]\n]*\]\(([^)\s]+)\)", guide.read_text()):
+                url = urlsplit(target)
+                if url.scheme or url.netloc or (url.path and not url.path.endswith(".md")):
+                    continue
+                path = (guide.parent / unquote(url.path)).resolve() if url.path else guide
+                with self.subTest(guide=guide.name, target=target):
+                    self.assertTrue(path.is_file(), f"Missing guide: {path}")
+                    if url.fragment:
+                        headings = re.findall(r"^#{1,6} (.+)$", path.read_text(), re.M)
+                        anchors = [re.sub(r"[^\w -]", "", heading.lower()).replace(" ", "-")
+                                   for heading in headings]
+                        self.assertIn(unquote(url.fragment), anchors)
+
     def test_foundation_includes_bastion_module_and_outputs(self):
         foundation = (ROOT / "infra/main.bicep").read_text()
         module = re.search(r"module bastion 'bastion[.]bicep' = \{.*?\n\}", foundation, re.S)
@@ -67,13 +94,17 @@ class LabCommandsTests(unittest.TestCase):
                     compile(block, str(guide), "exec")
 
     def test_cumulative_guides_preserve_active_bastion_kubeconfigs(self):
-        for guide in sorted((ROOT / "labs").glob("*.md"))[:11]:
+        cumulative_numbers = {*range(1, 7), *range(10, 16), *range(20, 25)}
+        for guide in sorted((ROOT / "labs").glob("*.md")):
+            if int(guide.name[:2]) not in cumulative_numbers:
+                continue
             for block in re.findall(r"^```bash\n(.*?)^```", guide.read_text(), re.M | re.S):
                 with self.subTest(guide=guide.name):
                     self.assertNotIn("az aks get-credentials", block)
 
     def test_bastion_tls_evidence_rejects_unverified_or_wrong_endpoints(self):
-        for guide, port in (("labs/01-baseline.md", 8443), ("labs/10-multi-region.md", 8444)):
+        for guide, port in (("labs/03-access-and-identity.md", 8443),
+                            ("labs/10-baseline.md", 8443), ("labs/23-multi-region.md", 8444)):
             block = self.bash_block(guide, "TunnelConfig=$(kubectl config view")
             check = re.search(r'jq -e --arg fqdn .*?<<< "\$TunnelConfig"', block, re.S)[0]
             endpoint = {
@@ -97,15 +128,140 @@ class LabCommandsTests(unittest.TestCase):
                                             text=True, capture_output=True)
                     self.assertEqual(result.returncode == 0, valid, result.stderr)
 
+    def test_beginner_render_guard_preserves_existing_state(self):
+        block = self.bash_block("labs/05-acr-and-workloads.md", "if [[ -e ./rendered/base")
+        guard = block.split("bash ./scripts/render-manifests.sh", 1)[0]
+        with tempfile.TemporaryDirectory() as directory:
+            base = pathlib.Path(directory) / "rendered/base"
+            for existing in (False, True):
+                with self.subTest(existing=existing):
+                    if existing:
+                        base.mkdir(parents=True)
+                        (base / "identity-patch.yaml").write_text("preserve me\n")
+                    result = subprocess.run(["bash", "-c", guard], cwd=directory,
+                                            text=True, capture_output=True)
+                    self.assertEqual(result.returncode == 0, not existing)
+                    if existing:
+                        self.assertIn("do not rerender", result.stderr)
+                        self.assertEqual((base / "identity-patch.yaml").read_text(), "preserve me\n")
+
+    def test_beginner_fault_rejects_wrong_evidence_and_always_attempts_recovery(self):
+        block = self.bash_block("labs/06-troubleshooting-and-lifecycle.md", "restore_selector()")
+        with tempfile.TemporaryDirectory() as directory:
+            binary = pathlib.Path(directory)
+            kubectl = binary / "kubectl"
+            kubectl.write_text("""#!/usr/bin/env python3
+import json, os, pathlib, sys
+args = sys.argv[1:]
+mode = os.environ["MODE"]
+with pathlib.Path(os.environ["CALLS"]).open("a") as file:
+    file.write(json.dumps(args) + "\\n")
+if args[0] == "patch":
+    selector = json.loads(args[args.index("-p") + 1])["spec"]["template"]["spec"]["nodeSelector"]["agentpool"]
+    if selector == "apps" and mode == "recovery-failure":
+        sys.exit(19)
+elif args[:2] == ["rollout", "status"] and "--timeout=30s" in args:
+    if mode == "unexpected-success":
+        sys.exit(0)
+    print("connection refused" if mode == "wrong-error" else "error: timed out waiting for the condition",
+          file=sys.stderr)
+    sys.exit(1)
+elif args[:2] == ["get", "pods"]:
+    print(json.dumps({"items": [{
+        "spec": {"nodeSelector": {"agentpool": "missing"}},
+        "status": {"conditions": [{
+            "type": "PodScheduled", "status": "False", "reason": "Unschedulable",
+            "message": "Insufficient cpu" if mode == "wrong-scheduler" else
+                       "0/6 nodes are available: didn't match Pod's node affinity/selector"
+        }]}
+    }]}))
+elif args[:2] == ["get", "events"] and mode == "diagnostic-failure":
+    sys.exit(25)
+""")
+            kubectl.chmod(0o755)
+            calls_path = binary / "calls.jsonl"
+            for mode in ("expected", "unexpected-success", "wrong-error", "wrong-scheduler",
+                         "diagnostic-failure", "recovery-failure"):
+                with self.subTest(mode=mode):
+                    calls_path.write_text("")
+                    env = dict(os.environ, PATH=f"{binary}:{os.environ['PATH']}",
+                               MODE=mode, CALLS=str(calls_path))
+                    result = subprocess.run(["bash", "-c", block], env=env,
+                                            text=True, capture_output=True, timeout=10)
+                    self.assertEqual(result.returncode == 0, mode == "expected", result.stderr)
+                    if mode == "diagnostic-failure":
+                        self.assertEqual(result.returncode, 25)
+                    if mode == "recovery-failure":
+                        self.assertIn("Recovery failed", result.stderr)
+                    calls = [json.loads(line) for line in calls_path.read_text().splitlines()]
+                    patches = [call for call in calls if call[0] == "patch"]
+                    selectors = [json.loads(call[call.index("-p") + 1])["spec"]["template"]
+                                 ["spec"]["nodeSelector"]["agentpool"] for call in patches]
+                    self.assertEqual(selectors, ["missing", "apps"])
+                    if mode != "recovery-failure":
+                        self.assertEqual(calls[-1][:3], ["rollout", "status", "deployment/order-api"])
+                        self.assertIn("--timeout=300s", calls[-1])
+
+    def test_beginner_handoff_rejects_unhealthy_or_stale_rollouts(self):
+        block = self.bash_block("labs/06-troubleshooting-and-lifecycle.md",
+                               "test -s ./rendered/base/kustomization.yaml")
+        self.assertNotRegex(block, r"deploy-foundation|render-manifests|kubectl (apply|patch|delete)")
+        node_check = re.search(r"kubectl get nodes -o json \| jq -e '(.*?)'", block, re.S)[1]
+        deployment_check = re.search(r"kubectl get deployments -n orders -o json \| jq -e '(.*?)'",
+                                     block, re.S)[1]
+        nodes = {"items": [
+            {"metadata": {"labels": {"agentpool": pool}},
+             "status": {"conditions": [{"type": "Ready", "status": "True"}]}}
+            for pool in ("system", "system", "system", "apps", "apps", "apps")
+        ]}
+        deployments = {"items": [
+            {"metadata": {"name": name, "generation": 3},
+             "spec": {"replicas": count, "template": {"spec": {"nodeSelector": {"agentpool": "apps"}}}},
+             "status": {"observedGeneration": 3, "updatedReplicas": count, "availableReplicas": count}}
+            for name, count in (("order-api", 2), ("order-worker", 1))
+        ]}
+        for problem in ("none", "missing-node", "not-ready", "wrong-pool"):
+            data = json.loads(json.dumps(nodes))
+            if problem == "missing-node":
+                data["items"].pop()
+            elif problem == "not-ready":
+                data["items"][0]["status"]["conditions"][0]["status"] = "False"
+            elif problem == "wrong-pool":
+                data["items"][0]["metadata"]["labels"]["agentpool"] = "apps"
+            with self.subTest(nodes=problem):
+                result = subprocess.run(["jq", "-e", node_check], input=json.dumps(data),
+                                        text=True, capture_output=True)
+                self.assertEqual(result.returncode == 0, problem == "none")
+        for problem in ("none", "missing-worker", "stale-generation", "old-replicas", "unavailable",
+                        "fault-selector", "changed-count"):
+            data = json.loads(json.dumps(deployments))
+            api = data["items"][0]
+            if problem == "missing-worker":
+                data["items"].pop()
+            elif problem == "stale-generation":
+                api["status"]["observedGeneration"] = 2
+            elif problem == "old-replicas":
+                api["status"]["updatedReplicas"] = 1
+            elif problem == "unavailable":
+                api["status"]["availableReplicas"] = 1
+            elif problem == "fault-selector":
+                api["spec"]["template"]["spec"]["nodeSelector"]["agentpool"] = "missing"
+            elif problem == "changed-count":
+                api["spec"]["replicas"] = 3
+            with self.subTest(deployments=problem):
+                result = subprocess.run(["jq", "-e", deployment_check], input=json.dumps(data),
+                                        text=True, capture_output=True)
+                self.assertEqual(result.returncode == 0, problem == "none")
+
     def test_expected_failures_preserve_strict_session_and_reject_wrong_evidence(self):
         examples = [
-            ("labs/02-identity.md", 'Denial=$(kubectl exec -n orders "$workerPod"',
+            ("labs/11-identity.md", 'Denial=$(kubectl exec -n orders "$workerPod"',
              "azure.core.exceptions.HttpResponseError: (Forbidden) Status: 403"),
-            ("labs/03-networking.md", "'http://order-api/readyz'",
+            ("labs/12-networking.md", "'http://order-api/readyz'",
              "urllib.error.URLError: <urlopen error timed out>"),
-            ("labs/03-networking.md", "'https://example.org'",
+            ("labs/12-networking.md", "'https://example.org'",
              "ConnectionResetError: Connection reset by peer"),
-            ("labs/04-gitops.md", "Reconciliation=$(flux reconcile",
+            ("labs/13-gitops.md", "Reconciliation=$(flux reconcile",
              "context deadline exceeded"),
         ]
         with tempfile.TemporaryDirectory() as directory:
@@ -146,7 +302,7 @@ else:
                             self.assertNotIn("SESSION_PRESERVED", result.stdout)
 
     def test_dns_fault_restores_worker_even_when_diagnostics_fail(self):
-        block = self.bash_block("labs/03-networking.md", 'worker=\'\'')
+        block = self.bash_block("labs/12-networking.md", 'worker=\'\'')
         with tempfile.TemporaryDirectory() as directory:
             binary = pathlib.Path(directory)
             kubectl = binary / "kubectl"
@@ -189,7 +345,7 @@ elif args[0] == "logs":
                     self.assertEqual(calls[-1][:3], ["rollout", "status", "deployment/order-worker"])
 
     def test_team_member_setup_requires_no_deployment_reads(self):
-        block = self.bash_block("labs/07-governance.md", 'settings=$(jq -e .')
+        block = self.bash_block("labs/20-governance.md", 'settings=$(jq -e .')
         with tempfile.TemporaryDirectory() as directory:
             root = pathlib.Path(directory)
             (root / "local.settings.json").write_text(json.dumps({
@@ -222,7 +378,7 @@ with pathlib.Path("calls.jsonl").open("a") as file:
             self.assertNotIn("--admin", calls[-1])
 
     def test_upgrade_report_labels_actual_sample_population(self):
-        block = self.bash_block("labs/09-upgrades.md", "ChangeStart:$changeStart")
+        block = self.bash_block("labs/22-upgrades.md", "ChangeStart:$changeStart")
         samples = [
             {"utc": "2026-09-24T08:01:00.000001+00:00", "status": 200},
             {"utc": "2026-09-24T08:02:00.000001+00:00", "status": 503},

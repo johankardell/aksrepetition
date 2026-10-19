@@ -1,12 +1,14 @@
-# Lab 11 - Serve a private model with KAITO and account for its GPU lifecycle
+# Lab 24 - Serve a private model with KAITO and account for its GPU lifecycle
+
+**Level:** advanced. **Type:** optional cumulative extension.
 
 **Customer:** an engineering team wants self-hosted inference for a synthetic order-support assistant, without turning an unauthenticated model endpoint into a public service. **Time:** 2-4 hours, including provisioning and cleanup. **Result:** a managed KAITO Workspace, verified GPU placement, a measured OpenAI-compatible request, a real network-denial/recovery exercise, and evidence that GPU compute was removed.
 
-**Prerequisites/re-entry.** Optional after labs 1-6, before final teardown. Keep their private management path, Cilium Overlay/UDR network, private ACR and healthy orders GitOps. Labs 7-10 are not prerequisites; if already completed, retain their governance, upgraded versions and restored primary-region state. Run from the repository root in Linux Bash with `jq`, `curl`, and Python 3 on the private management host. The operator needs AKS update and node-pool deletion authority plus Kubernetes platform administration; the image publisher and orders Flux service account must not receive these rights.
+**Prerequisites/re-entry.** Optional after labs 10-15, before final teardown. Keep their private management path, Cilium Overlay/UDR network, private ACR and healthy orders GitOps. Labs 20-23 are not prerequisites; if already completed, retain their governance, upgraded versions and restored primary-region state. Run from the repository root in Linux Bash with `jq`, `curl`, and Python 3 on the private management host. The operator needs AKS update and node-pool deletion authority plus Kubernetes platform administration; the image publisher and orders Flux service account must not receive these rights.
 
 The sourced `./scripts/use-lab.sh` helper supplies JSON strings `Lab` and `Outputs`, absolute repository path `Root`, and the strict `jq -er` accessors `lab_value KEY` and `output_value KEY`. Keep the original shell open between tasks, and never enable shell tracing or record transcripts while handling authentication material.
 
-Keep lab 1's native Bastion session alive for Kubernetes/Flux operations; second terminals share its exact temporary `KUBECONFIG` on the same host. The existing Bastion preview exception is for API connectivity only, not permission to enable unrelated preview GPU features. Do not overwrite the tunnel kubeconfig with fresh credentials.
+Keep lab 10's native Bastion session alive for Kubernetes/Flux operations; second terminals share its exact temporary `KUBECONFIG` on the same host. The existing Bastion preview exception is for API connectivity only, not permission to enable unrelated preview GPU features. Do not overwrite the tunnel kubeconfig with fresh credentials.
 
 **Support gate.** Source review: **2026-10-01**. This exercise reviews **KAITO 0.6.0** and uses that release's `kaito.sh/v1beta1` Workspace and `phi-4-mini-instruct` preset, not an example downloaded from `main`. Microsoft's managed AI toolchain operator guide warns that the add-on typically lags upstream; it does not pin the deployed managed version to 0.6.0. Verify the actual controller image/version and supported AKS/region/SKU combination before submitting the Workspace. Public Azure regions and NVIDIA Linux GPU nodes are the path here; Windows and AMD GPU workspaces are excluded. Do not install an upstream KAITO Helm release, a second GPU operator, NAP or preview extensions over the managed add-on to repair a compatibility problem. The separate **fully managed GPU node-pool feature is preview** in the reviewed documentation and is not required here.
 
@@ -14,7 +16,7 @@ Keep lab 1's native Bastion session alive for Kubernetes/Flux operations; second
 
 Use only the supplied synthetic prompts. Do not send customer orders, credentials or personal information. Model weights and runtime artifacts are downloaded; review their license, provenance and vulnerability status. Self-hosting does not supply content filtering, prompt-injection protection, end-user authentication or permission to use a model. No tool execution, RAG ingestion, training, fine-tuning or orders-application integration is performed.
 
-**Architecture/ownership.** The platform enables the managed add-on; KAITO reconciles the Workspace into GPU capacity and an inference Deployment/ClusterIP Service. The platform owns the temporary `kaito-lab` resources imperatively, like the incident namespace in lab 9; they are deliberately outside application Flux. KAITO owns its generated objects, so do not add HPA/KEDA or manually scale/edit that Deployment. Existing orders autoscalers and `system`/`apps` pools remain unchanged. For a persistent offering, promote the Workspace and policies through a separately authorized platform GitOps path, not the orders application's permissions.
+**Architecture/ownership.** The platform enables the managed add-on; KAITO reconciles the Workspace into GPU capacity and an inference Deployment/ClusterIP Service. The platform owns the temporary `kaito-lab` resources imperatively, like the incident namespace in lab 22; they are deliberately outside application Flux. KAITO owns its generated objects, so do not add HPA/KEDA or manually scale/edit that Deployment. Existing orders autoscalers and `system`/`apps` pools remain unchanged. For a persistent offering, promote the Workspace and policies through a separately authorized platform GitOps path, not the orders application's permissions.
 
 ## 1. Make a go/no-go decision before enabling anything
 
@@ -59,7 +61,7 @@ Inspect `cluster-before.json`: private API, correct resource ID/location, OIDC e
 
 Check the live managed add-on support guidance, API availability and existing operators. If KAITO is already installed, inventory `kubectl get workspaces.kaito.sh -A` and obtain its platform owner's agreement before continuing; never replace another installation. If another Workspace or concurrent GPU-provisioning exercise exists, stop rather than assuming this lab's ownership/cleanup boundaries apply.
 
-Review the Lab 3 firewall's current rules and DNS. This preset needs MCR runtime/model artifacts and their documented data endpoints (including `mcr.microsoft.com` and `*.data.mcr.microsoft.com`); inspect the running add-on's downloader image too. Azure control-plane/identity and AKS bootstrap endpoints must remain reachable. Private ACR connectivity alone is insufficient for public model artifacts. The supplied pod policy permits public TCP 443, with the **existing Azure Firewall FQDN rules** providing the destination allowlist. It does not permit access to private orders dependencies. Use firewall deny logs to identify missing artifact endpoints and amend the owned rules narrowly; never replace the accumulated firewall configuration with the original bootstrap or allow unrestricted Internet egress. No Hugging Face token is needed for this public preset.
+Review the Lab 12 firewall's current rules and DNS. This preset needs MCR runtime/model artifacts and their documented data endpoints (including `mcr.microsoft.com` and `*.data.mcr.microsoft.com`); inspect the running add-on's downloader image too. Azure control-plane/identity and AKS bootstrap endpoints must remain reachable. Private ACR connectivity alone is insufficient for public model artifacts. The supplied pod policy permits public TCP 443, with the **existing Azure Firewall FQDN rules** providing the destination allowlist. It does not permit access to private orders dependencies. Use firewall deny logs to identify missing artifact endpoints and amend the owned rules narrowly; never replace the accumulated firewall configuration with the original bootstrap or allow unrestricted Internet egress. No Hugging Face token is needed for this public preset.
 
 Record the approved start/deadline, SKU, expected node count, current pricing and responsible cleanup owner in the local execution record. Re-entry after an interrupted attempt starts by loading these baseline files, checking active Workspaces/pools and completing task 7 if time has expired. Do not recapture the baseline after provisioning: it would hide newly created pools.
 
@@ -275,7 +277,7 @@ Reuse the already built Python application image by its immutable reference; its
 ```bash
 ImageReference=$(kubectl -n orders get deployment order-api -o 'jsonpath={.spec.template.spec.containers[0].image}')
 [[ "$ImageReference" =~ @sha256:[a-f0-9]{64}$ ]] ||
-  { printf 'Complete lab 4 immutable-image delivery before using the probe.\n' >&2; exit 1; }
+  { printf 'Complete lab 13 immutable-image delivery before using the probe.\n' >&2; exit 1; }
 ClientTemplate=$(cat ./advanced/kaito/client.yaml)
 printf '%s\n' "${ClientTemplate//__IMAGE_REFERENCE__/$ImageReference}" > "$KaitoDir/client.yaml"
 if grep -nE '__[A-Z0-9_]+__' "$KaitoDir/client.yaml"; then
@@ -475,7 +477,7 @@ flux get kustomizations -A
 kubectl -n orders get deployments,hpa,scaledobjects
 kubectl -n orders describe scaledobject order-worker
 az aks nodepool list -g "$(lab_value ResourceGroup)" --cluster-name "$(lab_value ClusterName)" -o table
-read -r -p 'Currently active trusted orders HTTPS URL: Lab 3 private or Lab 10 edge: ' OrdersUri
+read -r -p 'Currently active trusted orders HTTPS URL: Lab 12 private or Lab 23 edge: ' OrdersUri
 OrdersUri="${OrdersUri%/}"
 [[ "$OrdersUri" == https://* ]] || { printf 'Supply the trusted HTTPS URL.\n' >&2; exit 1; }
 curl --fail-with-body --max-time 30 "$OrdersUri/readyz"
@@ -509,7 +511,7 @@ It is ClusterIP-only, pod-isolated by default and accessed through an authorized
 </details>
 
 <details>
-<summary>Model answer: Will the Lab 6 HPA/KEDA configuration scale the model?</summary>
+<summary>Model answer: Will the Lab 15 HPA/KEDA configuration scale the model?</summary>
 
 No. Those controllers target orders Deployments, not this Workspace. CPU utilization is often a poor GPU-serving signal; requests, token/context length, queue delay and GPU memory/utilization matter. Pod replicas, GPU provisioning and model-loading time are different loops. Test a supported single-owner scaling design; do not attach a second replica controller to KAITO-generated resources.
 

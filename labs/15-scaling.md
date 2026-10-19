@@ -1,14 +1,16 @@
-# Lab 6 — Scale APIs and event-driven workers within a cost envelope
+# Lab 15 — Scale APIs and event-driven workers within a cost envelope
+
+**Level:** intermediate.
 
 **Scenario.** Interactive traffic needs ready API capacity; queued work can wait briefly and scale to zero. Demonstrate the different control loops, enforce bounds, and expose the boundary between retryable delivery and durable idempotency.
 
-**Prerequisites/re-entry.** Complete labs 1–5, with healthy GitOps and observable API/worker traffic. Use Bash on the private Linux management host with the Lab 5 tools (`jq`, `curl`, `python3`, `openssl` and the Azure/Kubernetes/Git CLIs). Start each terminal with `set -euo pipefail`; continue in the same terminal unless stated otherwise. Human platform access must permit add-on/pool configuration, managed-identity federation and queue-scoped role assignment. Never give these rights to the image publisher. The GA AKS Kubernetes version determines the supported managed KEDA version; do not install another KEDA Helm release. On re-entry, source `use-lab.sh`, reload the scaling outputs/client ID from directive 2, and set the trusted HTTPS URL again.
+**Prerequisites/re-entry.** Complete labs 10–14, with healthy GitOps and observable API/worker traffic. Use Bash on the private Linux management host with the Lab 14 tools (`jq`, `curl`, `python3`, `openssl` and the Azure/Kubernetes/Git CLIs). Start each terminal with `set -euo pipefail`; continue in the same terminal unless stated otherwise. Human platform access must permit add-on/pool configuration, managed-identity federation and queue-scoped role assignment. Never give these rights to the image publisher. The GA AKS Kubernetes version determines the supported managed KEDA version; do not install another KEDA Helm release. On re-entry, source `use-lab.sh`, reload the scaling outputs/client ID from directive 2, and set the trusted HTTPS URL again.
 
 **Architecture/ownership.** HPA controls `order-api` replicas from Metrics Server CPU; KEDA creates/owns the worker's HPA from queue length and activates it from zero. Cluster autoscaler (CA) adds/removes nodes for **unschedulable requested capacity**, not utilization alone. Flux owns autoscaler specifications and pod templates but **not Deployment replicas** after directive 3. KEDA polls Service Bus using its own operator service account's federation; the workload's federation alone is insufficient.
 
 **Envelope and costs.** API 2–6 replicas, worker 0–5, apps pool min 2/max 4 nodes, unchanged three-node system pool, load ≤2,000 requests/≤20 concurrent with a ≤600-second request-start window, optional Spot pool 0–1 node, and one dedicated scaler managed identity. In-flight requests can finish after the load deadline (up to their 30-second timeout plus configured inter-request delay); it is not a process-kill timer. The job deadline bounds synthetic scheduling pressure. Verify regional D-family vCPU/Spot quota and subnet/OS-disk capacity before changing pools. The normal case is up to seven regular nodes (28 requested VM vCPUs if every node is D4) plus one optional Spot D4. Grafana, Firewall, Service Bus Premium, disks and private endpoints continue billing independently. Budget alerts are **not** spending caps, and quota is only one technical backstop.
 
-**Important data limitation.** Before Lab 8, worker deduplication is **in-memory, per process**. It cannot guarantee duplicate-free effects across replicas, restarts or Spot eviction. This lab proves its boundary rather than claiming exactly-once delivery. The business-effect acceptance check is completed by re-running the duplicate/restart test after Lab 8's durable PostgreSQL unique-key writes. Only the lab's synthetic, disposable processing is interruption-tolerant today.
+**Important data limitation.** Before Lab 21, worker deduplication is **in-memory, per process**. It cannot guarantee duplicate-free effects across replicas, restarts or Spot eviction. This lab proves its boundary rather than claiming exactly-once delivery. The business-effect acceptance check is completed by re-running the duplicate/restart test after Lab 21's durable PostgreSQL unique-key writes. Only the lab's synthetic, disposable processing is interruption-tolerant today.
 
 ## Numbered directives
 
@@ -18,7 +20,7 @@ Run Kubernetes/Flux commands inside the active native Bastion subshell on the pr
 
 **Challenge:** capture the current workload, resource-metrics and pool baseline, verify quota/headroom, and confirm the cluster is ready for bounded HPA, KEDA and node-scaling experiments.
 
-**Constraints:** use the approved envelope above and save baseline pool counts/bounds before changes. Stop if Metrics Server is unavailable or competing autoscalers already exist. The apps pool must remain regular Linux VMSS on the Lab 3 UDR network.
+**Constraints:** use the approved envelope above and save baseline pool counts/bounds before changes. Stop if Metrics Server is unavailable or competing autoscalers already exist. The apps pool must remain regular Linux VMSS on the Lab 12 UDR network.
 
 **Exit evidence:** retain current Deployments/autoscalers, container CPU metrics, pool sizes/min/max, regional quota and Kubernetes/KEDA/OIDC/Workload ID settings.
 
@@ -38,7 +40,7 @@ az aks show -g "$(lab_value ResourceGroup)" -n "$(lab_value ClusterName)" \
   --query '{version:kubernetesVersion,keda:workloadAutoScalerProfile.keda,oidc:oidcIssuerProfile.issuerUrl,workloadIdentity:securityProfile.workloadIdentity}' -o json
 ```
 
-**Evidence:** no existing worker/API competing autoscalers and CPU metrics available. If `kubectl top` fails, fix Metrics Server first; managed Prometheus is not HPA's resource-metrics source. Existing `apps` nodes are regular Linux VMSS nodes on the Lab 3 UDR network. Save baseline pool counts and bounds in the execution record.
+**Evidence:** no existing worker/API competing autoscalers and CPU metrics available. If `kubectl top` fails, fix Metrics Server first; managed Prometheus is not HPA's resource-metrics source. Existing `apps` nodes are regular Linux VMSS nodes on the Lab 12 UDR network. Save baseline pool counts and bounds in the execution record.
 
 Compare quota usage plus the permitted extra node vCPUs with both total regional and applicable VM-family limits. Quota availability is necessary but does not guarantee Azure allocation or zone capacity. Record existing replica counts and Git revisions so later changes can be attributed to the correct control loop.
 
@@ -147,14 +149,14 @@ Flux must no longer reconcile `spec.replicas`. Watch after several reconciliatio
 
 **Challenge:** generate bounded demand on one API container, measure external HTTPS impact and observe API scale-up/down while explaining the relationship between CPU requests and HPA targets.
 
-**Constraints:** keep API replicas within 2–6 and use the fixed 180-second CPU process, not arbitrary increases to limits/load. Use the real trusted Lab 3 HTTPS URL. Control-loop settings do not guarantee latency, and one hot pod can skew an average.
+**Constraints:** keep API replicas within 2–6 and use the fixed 180-second CPU process, not arbitrary increases to limits/load. Use the real trusted Lab 12 HTTPS URL. Control-loop settings do not guarantee latency, and one hot pod can skew an average.
 
 **Exit evidence:** record pre-load/current/desired replicas, CPU/request utilization, external p95/availability, scaling timestamps and post-load contraction across the stabilization window.
 
 <details>
 <summary>Solution</summary>
 
-Use the real HTTPS application URL from Lab 3:
+Use the real HTTPS application URL from Lab 12:
 
 ```bash
 read -r -p 'Trusted HTTPS application URL: ' UserUri
@@ -216,9 +218,9 @@ kubectl -n orders get hpa
 
 **Evidence:** nonzero queue backlog activates KEDA, workers rise (never above five), queue depth drains and workers return to zero after cooldown/HPA stabilization. Portal/ARM queue counts are delayed; use multiple samples, KEDA external metrics, processing logs and timestamps, not a single count. Service Bus Data Owner is not a connection string. Scaling continues with local/SAS authentication disabled.
 
-Do not interpret empty queue as durable order fulfillment before Lab 8. Rejected/dead-lettered messages can empty it too. Compare accepted count, processed synthetic IDs and dead-letter delta. If workload throughput is already high enough that backlog barely grows, the configured two-second delay should make the 150-message exercise observable; verify that patch is active before generating more messages.
+Do not interpret empty queue as durable order fulfillment before Lab 21. Rejected/dead-lettered messages can empty it too. Compare accepted count, processed synthetic IDs and dead-letter delta. If workload throughput is already high enough that backlog barely grows, the configured two-second delay should make the 150-message exercise observable; verify that patch is active before generating more messages.
 
-Capture worker logs while replicas are active; logs from scaled-to-zero pods must be queried through the Lab 5 log workspace. Use `.artifacts/keda-load.json` request IDs (`jq -r '.requests[].id' .artifacts/keda-load.json`) to identify this run rather than treating all queue activity as yours. A short backlog can trigger only a small replica increase; activation, healthy scaling and eventual drain within the cap are the required observations, not necessarily all five workers.
+Capture worker logs while replicas are active; logs from scaled-to-zero pods must be queried through the Lab 14 log workspace. Use `.artifacts/keda-load.json` request IDs (`jq -r '.requests[].id' .artifacts/keda-load.json`) to identify this run rather than treating all queue activity as yours. A short backlog can trigger only a small replica increase; activation, healthy scaling and eventual drain within the cap are the required observations, not necessarily all five workers.
 
 </details>
 
@@ -317,11 +319,11 @@ Restoring the Git identityId fixes only this injection. Real failures also requi
 
 ### 8. Prove duplicate handling, restart limitations, retry and dead-letter paths
 
-**Challenge:** use a single temporarily paused worker to compare same-process and post-restart duplicate handling, inspect a controlled poison message and attempt an interrupted receive/retry. Repeat the business-effect acceptance check after Lab 8.
+**Challenge:** use a single temporarily paused worker to compare same-process and post-restart duplicate handling, inspect a controlled poison message and attempt an interrupted receive/retry. Repeat the business-effect acceptance check after Lab 21.
 
 **Constraints:** use only synthetic disposable messages and the existing API/worker identities. Pause with KEDA's annotation, not another HPA. Never claim exactly-once behavior before durable storage; even a database PK cannot atomically cover unrelated external effects. Pod-interruption timing is nondeterministic, so report an inconclusive retry honestly.
 
-**Exit evidence:** retain matching IDs and duplicate/durable flags before/after restart, dead-letter reason/count delta and an honestly classified retry attempt. After Lab 8 require a duplicate after restart and one persisted business row. Leave dead-letter evidence for Lab 8/debrief; replay/purge only identified test messages, never delete/recreate the queue.
+**Exit evidence:** retain matching IDs and duplicate/durable flags before/after restart, dead-letter reason/count delta and an honestly classified retry attempt. After Lab 21 require a duplicate after restart and one persisted business row. Leave dead-letter evidence for Lab 21/debrief; replay/purge only identified test messages, never delete/recreate the queue.
 
 **Mandatory recovery/re-entry:** remove the temporary KEDA pause and resume/reconcile `orders` before leaving this directive. If interrupted, use the cleanup at the end of the solution first; Flux may not own arbitrary live annotations.
 
@@ -352,7 +354,7 @@ sleep 10
 kubectl -n orders logs deployment/order-worker --since=5m | grep -F "$DuplicateId"
 ```
 
-**Expected before Lab 8:** same process logs first `duplicate:false`, then `duplicate:true`, both `durable:false`. Now restart and resend:
+**Expected before Lab 21:** same process logs first `duplicate:false`, then `duplicate:true`, both `durable:false`. Now restart and resend:
 
 ```bash
 kubectl -n orders rollout restart deployment/order-worker
@@ -362,15 +364,15 @@ sleep 10
 kubectl -n orders logs deployment/order-worker --since=3m | grep -F "$DuplicateId"
 ```
 
-**Expected before Lab 8:** `duplicate:false` again—the state was lost. This is the explicit negative check, **not a successful exactly-once demonstration**. After Lab 8, repeat unchanged: the same ID must log duplicate true after restart, `durable:true`, and GET `/orders/{id}` must show one persisted business row. A PK alone cannot atomically cover unrelated side effects such as charging a card; use an outbox/inbox or downstream idempotency key where required.
+**Expected before Lab 21:** `duplicate:false` again—the state was lost. This is the explicit negative check, **not a successful exactly-once demonstration**. After Lab 21, repeat unchanged: the same ID must log duplicate true after restart, `durable:true`, and GET `/orders/{id}` must show one persisted business row. A PK alone cannot atomically cover unrelated side effects such as charging a card; use an outbox/inbox or downstream idempotency key where required.
 
-Only when repeating after Lab 8, verify the durable lookup for that same ID:
+Only when repeating after Lab 21, verify the durable lookup for that same ID:
 
 ```bash
 curl --fail-with-body --silent --show-error "$UserUri/orders/$DuplicateId"
 ```
 
-The returned ID/item must match the repeated payload and the durable worker logs. Before Lab 8 this endpoint intentionally returns 503; that is not a failure of this lab's negative check.
+The returned ID/item must match the repeated payload and the durable worker logs. Before Lab 21 this endpoint intentionally returns 503; that is not a failure of this lab's negative check.
 
 Send a poison message directly with the already-authorized API identity, bypassing the API's validation only for this controlled test:
 
@@ -427,7 +429,7 @@ flux reconcile kustomization orders --with-source
 trap - EXIT INT TERM
 ```
 
-If interrupted during this directive, these are the **first re-entry cleanup commands**. Leave dead-letter evidence available for Lab 8/incident debrief; any replay or purge must target only the test messages with deliberate receive/complete logic, not delete/recreate the queue.
+If interrupted during this directive, these are the **first re-entry cleanup commands**. Leave dead-letter evidence available for Lab 21/incident debrief; any replay or purge must target only the test messages with deliberate receive/complete logic, not delete/recreate the queue.
 
 </details>
 
@@ -521,7 +523,7 @@ Do not delete Spot capacity before returning workers to regular pools, or silent
 
 **Constraints:** do not enable NAP on this cumulative cluster or combine it with CA for the same cluster's workload capacity. The required path uses GA CA commands; on authoring CLI 2.90 the NAP flags `--node-provisioning-mode` and `--node-provisioning-default-pools` remain marked Preview even though NAP is a current service capability. Check the live matrix before a separate implementation.
 
-The reviewed NAP restrictions include no Windows pools, no IPv6, managed identity required, no stop/start, no outbound-type change after enabling, and Standard Load Balancer for a custom VNet. Lab 3 changed outbound type and later labs expect regular pool operations. An optional comparison requires a **separate** resource group/budget, private Linux Cilium Overlay with final UDR networking at creation, no CA, bounded aggregate CPU/memory and allowed SKUs, initially no Spot and at most two D4-equivalent workload nodes. Use current supported provisioning documentation, not copied preview commands. Delete that footprint the same day; NodePool limits may briefly overshoot during parallel provisioning, so also constrain quota/SKUs and monitor cost. The capstone never depends on this optional branch.
+The reviewed NAP restrictions include no Windows pools, no IPv6, managed identity required, no stop/start, no outbound-type change after enabling, and Standard Load Balancer for a custom VNet. Lab 12 changed outbound type and later labs expect regular pool operations. An optional comparison requires a **separate** resource group/budget, private Linux Cilium Overlay with final UDR networking at creation, no CA, bounded aggregate CPU/memory and allowed SKUs, initially no Spot and at most two D4-equivalent workload nodes. Use current supported provisioning documentation, not copied preview commands. Delete that footprint the same day; NodePool limits may briefly overshoot during parallel provisioning, so also constrain quota/SKUs and monitor cost. The capstone never depends on this optional branch.
 
 **Exit evidence:** retain the comparison, cleanup PR and healthy autoscaler/reconciler state, with empty active queue and synthetic job/delay/Spot configuration removed. Keep HPA/KEDA and omitted Deployment replicas for later labs; restore minimum three regular apps nodes if required by baseline resilience, retaining max four.
 
@@ -615,7 +617,7 @@ Scheduling uses requests, placement constraints and allocatable resources; actua
 <details>
 <summary>Model answer: Does Spot plus retries guarantee correct orders?</summary>
 
-No. At-least-once delivery requires durable idempotent business effects. Before Lab 8 this app's memory-only dedup fails after restart or across replicas.
+No. At-least-once delivery requires durable idempotent business effects. Before Lab 21 this app's memory-only dedup fails after restart or across replicas.
 
 </details>
 
@@ -642,7 +644,7 @@ No. The worker remains receiver-only; a separate operator-federated scaler ident
 
 ## Optional extension
 
-With the scaling baseline healthy and temporary faults removed, continue to lab 7 or run [Lab 11: KAITO inference](11-kaito.md) first. The KAITO exercise requires separate GPU quota/budget approval and same-session GPU cleanup; it does not replace the HPA/KEDA work or become a prerequisite for later labs.
+With the scaling baseline healthy and temporary faults removed, continue to lab 20 or run [Lab 24: KAITO inference](24-kaito.md) first. The KAITO exercise requires separate GPU quota/budget approval and same-session GPU cleanup; it does not replace the HPA/KEDA work or become a prerequisite for later labs.
 
 ## References and support
 

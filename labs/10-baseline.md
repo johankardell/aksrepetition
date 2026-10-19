@@ -1,12 +1,22 @@
-# Lab 1 - Build and justify an enterprise AKS baseline
+# Lab 10 - Build and justify an enterprise AKS baseline
 
 **Level:** intermediate. **Scenario:** you are the platform engineer explaining a new business-application platform to networking, security and application teams.
 
 **Outcome:** a private AKS cluster with repeatable infrastructure, native Azure Bastion API access, Entra authentication, Cilium Overlay networking, separate system/application capacity and a synthetic workload. Bastion's AKS native tunnel is the explicitly accepted preview dependency; the cluster API itself remains private. This is stage one, not yet the completed private-dependency design.
 
+## Entry paths
+
+**Fresh experienced start:** beginners are not a prerequisite. Complete the README bootstrap and all directives below to create the foundation once. This retains the full intermediate baseline exercise.
+
+**Completed beginner labs 1-6:** reuse the same foundation and rendered workload. Complete the read-only [lab 6 handoff checks](06-troubleshooting-and-lifecycle.md#4-assemble-the-handoff-evidence), including [lab 3's TLS/context checks](03-access-and-identity.md#3-verify-api-connectivity-tls-and-authorization), and compare the evidence with this lab's exit criteria. If disconnected, reconnect using the sourceable Bastion helper before checking; do not overwrite its active kubeconfig.
+
+For this resume path, complete directive 1, directive 2's discovery/review (not unnecessary provider registration), and the availability/customer discussion below. **Skip directive 3's foundation what-if/apply, directive 4's installation/host-transfer setup already completed, directive 5's build/render/apply, and directive 6's fault already evidenced.** Retain directive 4's access verification and directive 5's successful probes. Do not recreate settings/keys, rebuild the image or rerender simply to enter the intermediate track. Continue to [lab 11](11-identity.md) only with the healthy baseline and required evidence.
+
+**Incomplete or progressed environment:** missing evidence is not permission to replay bootstrap. Resume the last unfinished beginner task using its recovery guidance. If identity/networking/GitOps/scaling or later changes already exist, return to that stage's re-entry guidance instead; do not revert a progressed cluster to these baseline values. Local completion notes alone do not prove current state.
+
 ## Prerequisites and resource boundary
 
-Complete the [README bootstrap](../README.md#bootstrap-configuration). Have a Linux workstation for Bastion access. Foundation supplies a private Ubuntu build VM and peered Azure Firewall for the later data-plane tasks, without a VPN or VM public IP. Confirm spending for six worker VMs, the small build VM, AKS Standard tier, ACR Premium, Service Bus Premium, Log Analytics, **Bastion Standard with two scale units/public IP**, and **Azure Firewall Standard/public IP from lab 1 onward**. Check at least 24 node vCPUs plus surge headroom and the build VM's additional two B-series vCPUs. Use only the dedicated resource group.
+For a fresh start, complete the [README bootstrap](../README.md#bootstrap-configuration); beginner graduates retain their existing configuration. Have a Linux workstation for Bastion access. Foundation supplies a private Ubuntu build VM and peered Azure Firewall for the later data-plane tasks, without a VPN or VM public IP. Confirm spending for six worker VMs, the small build VM, AKS Standard tier, ACR Premium, Service Bus Premium, Log Analytics, **Bastion Standard with two scale units/public IP**, and **Azure Firewall Standard/public IP from foundation deployment onward (lab 2 or a fresh lab 10)**. Check at least 24 node vCPUs plus surge headroom and the build VM's additional two B-series vCPUs. Use only the dedicated resource group.
 
 Files: `infra/main.bicep`, `infra/bastion.bicep`, `infra/workload-identities.bicep`, `scripts/deploy-foundation.sh`, `scripts/activate-aks-bastion.sh`, `scripts/connect-aks-bastion.sh`, `app/`, `k8s/base/`. Run these solutions in Bash on Linux at the repository root, with Azure CLI 2.90+, jq, kubectl, kubelogin, Podman, dig, getent, OpenSSL and curl installed.
 
@@ -16,7 +26,7 @@ Keep strict mode enabled for the following solutions. `use-lab.sh` supplies `Lab
 
 ### 1. Explain the platform before deploying
 
-Sketch this request/data path: private administrator -> AKS private API; kubelet identity -> ACR; workload identity -> Azure dependencies; web/API -> Service Bus -> worker. The workload dependencies are prepared here and explored in lab 2.
+Sketch this request/data path: private administrator -> AKS private API; kubelet identity -> ACR; workload identity -> Azure dependencies; web/API -> Service Bus -> worker. The workload dependencies are prepared here and explored in lab 11.
 
 Inspect `infra/main.bicep`. Identify the **cluster mode**, **pricing tier**, **network plugin/IPAM**, **data plane**, **node OS**, **control-plane exposure**, and three separate managed identity purposes. Explain why "private cluster" says nothing by itself about the data-plane application's public exposure.
 
@@ -28,7 +38,7 @@ Confirm no pod/service/VNet address range overlaps connected networks. Change th
 | Decision | Answer from `infra/main.bicep` |
 |---|---|
 | Cluster mode and pricing | Manually managed AKS Standard mode, not Automatic; the resource SKU is `Base` with the `Standard` pricing tier. |
-| Networking | Azure CNI Overlay (`azure` / `overlay`) with the Cilium data plane. Pods use `192.168.0.0/16`, services `172.20.0.0/16`, the default spoke `10.40.0.0/16` and foundation firewall hub `10.50.0.0/16`. Check all ranges against connected networks. Management egress uses the firewall now; node egress transitions in lab 3. |
+| Networking | Azure CNI Overlay (`azure` / `overlay`) with the Cilium data plane. Pods use `192.168.0.0/16`, services `172.20.0.0/16`, the default spoke `10.40.0.0/16` and foundation firewall hub `10.50.0.0/16`. Check all ranges against connected networks. Management egress uses the firewall now; node egress transitions in lab 12. |
 | Node OS and placement | Azure Linux 3, with three tainted system nodes and three application nodes across the configured zones. Applications select the `apps` pool. |
 | Control plane | Private AKS API, public FQDN disabled, managed Entra integration, Azure RBAC, and local cluster accounts disabled. |
 | Cluster identity | Manages Azure infrastructure, with Network Contributor on the spoke and Managed Identity Operator on the kubelet identity. |
@@ -37,7 +47,7 @@ Confirm no pod/service/VNet address range overlaps connected networks. Change th
 
 The administrator reaches the private API through the Bastion native tunnel, then authenticates with Entra and is authorized by Azure RBAC. Bastion supplies connectivity, not Kubernetes authorization. Independently, kubelets pull the image from ACR. The API accepts a synthetic order, sends it to Service Bus using its workload identity, and the worker consumes it using its own identity. Application traffic does not traverse the Kubernetes management API.
 
-Private control-plane access does not prevent a public LoadBalancer or gateway from exposing an application. Here the initial Service is ClusterIP and access is by port-forward; lab 3 adds internal ingress. The dependency public endpoints are still enabled during bootstrap and are not the finished private-network design.
+Private control-plane access does not prevent a public LoadBalancer or gateway from exposing an application. Here the initial Service is ClusterIP and access is by port-forward; lab 12 adds internal ingress. The dependency public endpoints are still enabled during bootstrap and are not the finished private-network design.
 
 </details>
 
@@ -57,7 +67,7 @@ az provider show --namespace Microsoft.ContainerService --query registrationStat
 az provider show --namespace Microsoft.ServiceBus --query registrationState -o tsv
 ```
 
-Check `restrictions` and zone support in the SKU output; a familiar VM name is not a capacity guarantee. Select a GA patch with a later supported upgrade available for lab 9, rather than a preview. Register required providers if not registered and you have authority:
+Check `restrictions` and zone support in the SKU output; a familiar VM name is not a capacity guarantee. Select a GA patch with a later supported upgrade available for lab 22, rather than a preview. Register required providers if not registered and you have authority:
 
 Check `kubectl version --client` as well. Its minor version must be within one minor of the selected API server throughout the exercise; use a matching client if the local installation is newer. The managed Gateway API bundle is selected by the AKS version, not installed independently from the newest upstream manifest.
 
@@ -104,7 +114,7 @@ az deployment operation group list -g "$(lab_value ResourceGroup)" -n foundation
 
 A newly created identity/role can need propagation. Inspect role scope and principal before retrying; do not solve it by assigning Owner to every identity. A failed/canceled foundation deployment may have no outputs: `use-lab.sh` reports that state and loads bootstrap settings only so you can inspect the failure and retry the initial deployment. Generated service names are unavailable until usable outputs exist. A deployment still in progress, malformed metadata, or a successful deployment missing required outputs is a stop condition, not an empty successful baseline.
 
-`RoleDefinitionDoesNotExist` is not an identity-propagation error: verify the referenced built-in role ID. The worker's queue-scoped [Azure Service Bus Data Receiver](https://learn.microsoft.com/azure/role-based-access-control/built-in-roles/integration#azure-service-bus-data-receiver) role is `4f6d3b9b-027b-4f4c-9142-0e5a2a2247e0`. After correcting a template during initial bootstrap, review the what-if again and rerun the explicitly confirmed deployment above; do not delete the resource group or broaden permissions. Never rerun the foundation bootstrap over a cluster progressed beyond lab 1.
+`RoleDefinitionDoesNotExist` is not an identity-propagation error: verify the referenced built-in role ID. The worker's queue-scoped [Azure Service Bus Data Receiver](https://learn.microsoft.com/azure/role-based-access-control/built-in-roles/integration#azure-service-bus-data-receiver) role is `4f6d3b9b-027b-4f4c-9142-0e5a2a2247e0`. After correcting a template during initial bootstrap, review the what-if again and rerun the explicitly confirmed deployment above; do not delete the resource group or broaden permissions. Never rerun the foundation bootstrap over a cluster progressed beyond lab 10.
 
 </details>
 
@@ -192,7 +202,7 @@ For another terminal's port-forward or diagnostics, follow the [shared-session r
 <details>
 <summary>Solution</summary>
 
-Before lab 3, ACR's public endpoint remains enabled for authenticated bootstrap. From the private build VM, grant yourself **AcrPush** at this registry only if not already authorized:
+Before lab 12, ACR's public endpoint remains enabled for authenticated bootstrap. From the private build VM, grant yourself **AcrPush** at this registry only if not already authorized:
 
 ```bash
 me=$(az ad signed-in-user show --query id -o tsv)
@@ -210,7 +220,7 @@ kubectl get pods -n orders -o wide
 kubectl get pdb -n orders
 ```
 
-Use a unique image tag if repeating the build. Lab 4 replaces mutable lab tags with immutable references. ACR has no admin password; kubelet pulls use its own managed identity, not your human login.
+Use a unique image tag if repeating the build. Lab 13 replaces mutable lab tags with immutable references. ACR has no admin password; kubelet pulls use its own managed identity, not your human login.
 
 In a separate Bash terminal on the same host, export the exact active tunnel `KUBECONFIG` first:
 
@@ -225,13 +235,13 @@ curl --fail --show-error http://localhost:8080/healthz
 curl --fail --show-error http://localhost:8080/readyz
 ```
 
-Both return success. The root page links to the API explorer. Leave order submission for lab 2. A worker deployment without an HTTP readiness endpoint only proves the process stays running; business health requires queue and processing evidence later.
+Both return success. The root page links to the API explorer. Leave order submission for lab 11. A worker deployment without an HTTP readiness endpoint only proves the process stays running; business health requires queue and processing evidence later.
 
 </details>
 
 ### 6. Break scheduling, diagnose it, and restore the baseline
 
-**Task:** in the lab only, make the API select a nonexistent node pool, explain the stalled rollout, and restore it. Preserve the healthy baseline for lab 2; do not delete nodes or add arbitrary capacity to bypass the fault.
+**Task:** in the lab only, make the API select a nonexistent node pool, explain the stalled rollout, and restore it. Preserve the healthy baseline for lab 11; do not delete nodes or add arbitrary capacity to bypass the fault.
 
 <details>
 <summary>Solution</summary>
@@ -301,7 +311,7 @@ Platform/network teams own Bastion and private routing/DNS. Native tunneling sol
 
 ## Cleanup and references
 
-Remove the injected selector and stop the port-forward when finished. Keep all resources for lab 2. Do not delete nodes or the resource group between labs.
+Remove the injected selector and stop the port-forward when finished. Keep all resources for lab 11. Do not delete nodes or the resource group between labs.
 
 <details>
 <summary>Solution: cumulative cleanup</summary>
@@ -313,7 +323,7 @@ kubectl get deployment order-api -n orders -o jsonpath='{.spec.template.spec.nod
 kubectl rollout status deployment/order-api -n orders --timeout=300s
 ```
 
-The selector must be `apps`. Stop the port-forward with Ctrl+C in the terminal that owns it; start the same task-5 port-forward again when beginning lab 2. Keep the rendered manifests, image and Azure resources. Run `disconnect_aks_bastion` when pausing; this stops only the local tunnel, removes its temporary kubeconfig and restores the previous `KUBECONFIG`, **not the billable Bastion host**. Activate a fresh tunnel for lab 2. At final teardown, close all tunnel sessions before retiring Bastion and its public IP.
+The selector must be `apps`. Stop the port-forward with Ctrl+C in the terminal that owns it; start the same task-5 port-forward again when beginning lab 11. Keep the rendered manifests, image and Azure resources. Run `disconnect_aks_bastion` when pausing; this stops only the local tunnel, removes its temporary kubeconfig and restores the previous `KUBECONFIG`, **not the billable Bastion host**. Activate a fresh tunnel for lab 11. At final teardown, close all tunnel sessions before retiring Bastion and its public IP.
 
 </details>
 

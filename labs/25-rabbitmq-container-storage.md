@@ -1,10 +1,10 @@
-# Lab 12 - Measure RabbitMQ storage density with Azure Container Storage
+# Lab 25 - Measure RabbitMQ storage density with Azure Container Storage
 
 **Level:** advanced. **Type:** optional and self-contained. **Scenario:** a messaging platform needs a three-member RabbitMQ cluster, but a managed disk for every stateful pod can exhaust the data-disk attachment limit of an AKS node long before CPU and memory are full.
 
 **Outcome:** a measured comparison between ordinary Azure Disk CSI persistence and Azure Container Storage 2.x backed by local NVMe. Both deployments keep one PV and PVC per RabbitMQ member and spread the three members across three AKS nodes. The comparison distinguishes Kubernetes volume count, Azure managed-disk attachments, physical local devices, performance, and durability rather than claiming that a storage layer makes RabbitMQ stateless.
 
-This lab creates a dedicated resource group and AKS cluster. It does not use or modify the cumulative labs 1-10 environment.
+This lab creates a dedicated resource group and AKS cluster. It does not use or modify the cumulative labs 10-15 and 20-23 environment.
 
 Use a separate Bash session outside the cumulative Bastion subshell, on a host with private routing/DNS to this lab's dedicated cluster. The working-folder kubeconfig below is isolated from both your default config and any active cumulative tunnel; that tunnel does not reach this independent API.
 

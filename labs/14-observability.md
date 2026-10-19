@@ -1,14 +1,16 @@
-# Lab 5 — Operate against SLOs and diagnose failures
+# Lab 14 — Operate against SLOs and diagnose failures
+
+**Level:** intermediate.
 
 **Scenario.** Pods are Running, but customers report slow orders. Build evidence that separates HTTP acceptance, asynchronous completion, platform health and monitoring failure.
 
-**Prerequisites/re-entry.** Complete Lab 4 with `orders` and `orders-test` Flux Kustomizations Ready. Run Bash at the repository root on a Linux host with private management connectivity. Use `set -euo pipefail` in each terminal. Install Azure CLI, kubectl, kubelogin, Flux CLI, Git, GitHub CLI, `jq`, `curl` (supporting `--fail-with-body`), `python3`, and `openssl`. Re-read local configuration and the monitoring deployment outputs when returning. The platform operator needs AKS configuration/diagnostic permissions and role-assignment rights; the observer needs Monitoring Reader, Log Analytics Reader and Grafana Viewer at their respective resources. Deploying a Grafana resource does not by itself give dashboard access.
+**Prerequisites/re-entry.** Complete Lab 13 with `orders` and `orders-test` Flux Kustomizations Ready. Run Bash at the repository root on a Linux host with private management connectivity. Use `set -euo pipefail` in each terminal. Install Azure CLI, kubectl, kubelogin, Flux CLI, Git, GitHub CLI, `jq`, `curl` (supporting `--fail-with-body`), `python3`, and `openssl`. Re-read local configuration and the monitoring deployment outputs when returning. The platform operator needs AKS configuration/diagnostic permissions and role-assignment rights; the observer needs Monitoring Reader, Log Analytics Reader and Grafana Viewer at their respective resources. Deploying a Grafana resource does not by itself give dashboard access.
 
 Solutions continue in the same Bash terminal unless stated otherwise. `source ./scripts/use-lab.sh` sets `Lab` and `Outputs` to JSON strings and `Root` to the absolute repository root; `lab_value KEY` and `output_value KEY` read required values with `jq -er`. On re-entry, also reload `Monitor` with the deployment-output command in directive 2. Do not enable shell tracing (`set -x`) while handling telemetry connection strings or tokens.
 
-For a Lab 3 private CA, set both `SSL_CERT_FILE` and `CURL_CA_BUNDLE` to the same absolute approved CA-bundle path in every management/consumer terminal. This preserves certificate verification for the Python helpers and direct `curl` commands without modifying system trust. Never use `curl --insecure` to bypass trust failures.
+For a Lab 12 private CA, set both `SSL_CERT_FILE` and `CURL_CA_BUNDLE` to the same absolute approved CA-bundle path in every management/consumer terminal. This preserves certificate verification for the Python helpers and direct `curl` commands without modifying system trust. Never use `curl --insecure` to bypass trust failures.
 
-Keep lab 1's native Bastion subshell alive for Kubernetes/Flux operations. Every second terminal doing a port-forward or exec shares its exact active temporary `KUBECONFIG` on the same host. The real HTTPS load path still needs the private data-plane host/routing; API tunneling alone does not reach the private gateway.
+Keep lab 10's native Bastion subshell alive for Kubernetes/Flux operations. Every second terminal doing a port-forward or exec shares its exact active temporary `KUBECONFIG` on the same host. The real HTTPS load path still needs the private data-plane host/routing; API tunneling alone does not reach the private gateway.
 
 **Paths and scope.** API `/metrics` → managed `ama-metrics` agent → **Azure Monitor workspace** (Prometheus); container stdout/stderr + selected control-plane diagnostics → existing **Log Analytics workspace**; application Azure Monitor OpenTelemetry distro → workspace-based **Application Insights**; Grafana queries Prometheus using its own managed identity. An Azure Monitor workspace is **not** a Log Analytics workspace. The worker is not an HTTP metrics server; observe its processing through logs/traces and Service Bus metrics, not a nonexistent worker `/metrics`.
 
@@ -22,7 +24,7 @@ Keep lab 1's native Bastion subshell alive for Kubernetes/Flux operations. Every
 
 **Challenge:** verify the required resource providers, supported regional destinations, existing Container Insights authentication and diagnostic categories before onboarding telemetry.
 
-**Constraints:** stop on an unsupported/preview-only regional combination. Check Lab 3 Firewall desired state permits TCP 443 to `*.monitor.azure.com`, `*.monitoring.azure.com`, `*.ods.opinsights.azure.com`, `*.oms.opinsights.azure.com`, `login.microsoftonline.com`, `global.handler.control.monitor.azure.com`, and the exact Application Insights ingestion hostname. Preserve private Service Bus/ACR routes. TLS inspection and proxies need a separate supported design; do not assume a generic HTTPS proxy works with private AKS.
+**Constraints:** stop on an unsupported/preview-only regional combination. Check Lab 12 Firewall desired state permits TCP 443 to `*.monitor.azure.com`, `*.monitoring.azure.com`, `*.ods.opinsights.azure.com`, `*.oms.opinsights.azure.com`, `login.microsoftonline.com`, `global.handler.control.monitor.azure.com`, and the exact Application Insights ingestion hostname. Preserve private Service Bus/ACR routes. TLS inspection and proxies need a separate supported design; do not assume a generic HTTPS proxy works with private AKS.
 
 **Exit evidence:** record supported locations, Container Insights managed-identity authentication, the four selected diagnostic categories and approved telemetry egress.
 
@@ -134,7 +136,7 @@ jq -er '.grafanaEndpoint.value' <<< "$Monitor"
 
 **Challenge:** send a uniquely identified synthetic order, trace enqueue through worker processing, and correlate application telemetry with container logs and API metrics. Capture a local baseline without mistaking it for the user-path SLO.
 
-**Constraints:** use only a management-local port-forward and synthetic payloads. Allow ingestion time, and keep 100% trace sampling until this proof is complete. Do not claim durable fulfillment before Lab 8 or full client-to-worker tracing without validating the actual instrumentation.
+**Constraints:** use only a management-local port-forward and synthetic payloads. Allow ingestion time, and keep 100% trace sampling until this proof is complete. Do not claim durable fulfillment before Lab 21 or full client-to-worker tracing without validating the actual instrumentation.
 
 **Exit evidence:** retain order/trace IDs, correlated API/worker spans and timestamps, the worker log, metrics sample and baseline artifact. Evaluate the 60-second processing objective separately from HTTP acceptance.
 
@@ -184,9 +186,9 @@ EOF
 bash ./ops/invoke-logs-query.sh --query "$Query"
 ```
 
-**Evidence:** the API's `orders.enqueue` and worker's `orders.process` share an OperationId through Service Bus application properties; the parent span can be traced across asynchronous processing. The worker log identifies the synthetic order and reports `durable:false` before Lab 8. Missing shared IDs suggest dropped application properties, a missing OTel initializer or sampling, not necessarily Service Bus failure. If automatic HTTP instrumentation differs in the installed distro, first correlate the explicitly created enqueue/process spans; verify FastAPI auto-instrumentation before claiming client-to-worker trace continuity.
+**Evidence:** the API's `orders.enqueue` and worker's `orders.process` share an OperationId through Service Bus application properties; the parent span can be traced across asynchronous processing. The worker log identifies the synthetic order and reports `durable:false` before Lab 21. Missing shared IDs suggest dropped application properties, a missing OTel initializer or sampling, not necessarily Service Bus failure. If automatic HTTP instrumentation differs in the installed distro, first correlate the explicitly created enqueue/process spans; verify FastAPI auto-instrumentation before claiming client-to-worker trace continuity.
 
-Use span timestamps/durations and the matching processed log to compare enqueue with processing completion. A measured interval within 60 seconds satisfies only this synthetic processing check; before Lab 8 there is no durable business row. Missing telemetry is an evidence gap, not proof that processing failed or that the objective was met. The port-forward bypasses gateway/TLS routing and cannot certify the external user path.
+Use span timestamps/durations and the matching processed log to compare enqueue with processing completion. A measured interval within 60 seconds satisfies only this synthetic processing check; before Lab 21 there is no durable business row. Missing telemetry is an evidence gap, not proof that processing failed or that the objective was met. The port-forward bypasses gateway/TLS routing and cannot certify the external user path.
 
 </details>
 
@@ -194,7 +196,7 @@ Use span timestamps/durations and the matching processed log to compare enqueue 
 
 **Challenge:** compare five-minute API availability/latency and queue metrics with measured consumer-path HTTPS results. Explain blind spots, then collect genuine alert firing, notification and recovery evidence during directive 8.
 
-**Constraints:** use authenticated Grafana with Viewer for queries; saving dashboards requires scoped Editor, never global admin. Test from the consumer network with the real trusted Lab 3 HTTPS URL, without disabling certificate verification. Missing data is not proof of availability, and deployed rules are not proof of notification.
+**Constraints:** use authenticated Grafana with Viewer for queries; saving dashboards requires scoped Editor, never global admin. Test from the consumer network with the real trusted Lab 12 HTTPS URL, without disabling certificate verification. Missing data is not proof of availability, and deployed rules are not proof of notification.
 
 **Exit evidence:** retain both query results and timed local/external load artifacts, explain any discrepancy, and record rule name, affected SLI, fired/resolved UTC times and received email from an actual incident. Do not claim a production SLO from these lab thresholds.
 
@@ -220,7 +222,7 @@ az monitor metrics list --resource "$(output_value serviceBusId)" \
   --filter "EntityName eq 'orders'" -o json
 ```
 
-**Evidence:** no result means missing series or no measured requests, not 100% availability. With traffic but no failures, the `or vector(0)` branch avoids an empty error numerator; the positive-request-rate gate excludes idle windows. The alert uses 5xx ratio, p95 and a separate missing-metrics rule; action-group email requires a **real firing condition**, not merely a deployed rule. The availability query sees only requests reaching the API. A gateway outage or no Ready endpoints may never increment it. Test the real Lab 3 HTTPS URL from the consumer network with `invoke-order-load.sh` and compare its measured availability/p95 to the port-forward baseline; trust the external measurement for user impact. Do not disable TLS certificate verification.
+**Evidence:** no result means missing series or no measured requests, not 100% availability. With traffic but no failures, the `or vector(0)` branch avoids an empty error numerator; the positive-request-rate gate excludes idle windows. The alert uses 5xx ratio, p95 and a separate missing-metrics rule; action-group email requires a **real firing condition**, not merely a deployed rule. The availability query sees only requests reaching the API. A gateway outage or no Ready endpoints may never increment it. Test the real Lab 12 HTTPS URL from the consumer network with `invoke-order-load.sh` and compare its measured availability/p95 to the port-forward baseline; trust the external measurement for user impact. Do not disable TLS certificate verification.
 
 Use Grafana Editor only if you need to save a dashboard; Viewer can query but cannot author. Ask the platform operator for a scoped role, not global admin. In Azure Monitor Alerts, record rule name, fired/resolved UTC time, affected SLI, and received email. For a production SLO, add gateway/external-probe telemetry and multi-window error-budget burn rules; these five-minute lab thresholds are deliberately simpler.
 
@@ -230,7 +232,7 @@ With directive 4's port-forward still running, capture a five-minute local inter
 bash ./ops/invoke-order-load.sh --base-uri http://127.0.0.1:8081 --operation Browse \
   --count 2000 --concurrency 1 --duration-seconds 300 --delay-milliseconds 200 \
   --output-path .artifacts/slo-local.json
-read -r -p 'Trusted HTTPS application URL from lab 3: ' UserUri
+read -r -p 'Trusted HTTPS application URL from lab 12: ' UserUri
 UserUri=${UserUri%/}
 [[ "$UserUri" == https://* ]] || { printf '%s\n' 'Use the trusted HTTPS application URL.' >&2; exit 1; }
 bash ./ops/invoke-order-load.sh --base-uri "$UserUri" --operation Browse \
@@ -269,7 +271,7 @@ kubectl -n orders exec "$ApiPod" -c api -- python -c \
 ```
 
 ```bash
-read -r -p 'Trusted HTTPS application URL from lab 3: ' UserUri
+read -r -p 'Trusted HTTPS application URL from lab 12: ' UserUri
 UserUri=${UserUri%/}
 [[ "$UserUri" == https://* ]] || { printf '%s\n' 'Use the trusted HTTPS application URL.' >&2; exit 1; }
 bash ./ops/invoke-order-load.sh --base-uri "$UserUri" --operation Browse --count 600 \
@@ -364,7 +366,7 @@ bash ./ops/invoke-order-load.sh --base-uri "$UserUri" --count 20 --concurrency 1
 
 **Exit evidence:** retain accepted agent-configuration evidence, table retention/ingestion results, reviewed sampling diff and observed `ItemCount` values, plus cleanup ownership and continuing costs.
 
-Retain telemetry resources for labs 6–10 and stop port-forwards when done. Final teardown is only at course end; do not delete the shared Log Analytics workspace mid-course. Retention and Grafana still bill when AKS is stopped; ingestion caps and budget emails are not guaranteed spending caps.
+Retain telemetry resources for labs 15 and 20–23 and stop port-forwards when done. Final teardown is only at course end; do not delete the shared Log Analytics workspace mid-course. Retention and Grafana still bill when AKS is stopped; ingestion caps and budget emails are not guaranteed spending caps.
 
 <details>
 <summary>Solution</summary>
@@ -438,7 +440,7 @@ bash ./ops/invoke-logs-query.sh --query "$Query"
 
 Wait for ingestion and narrow the time filter to after the sampling rollout when interpreting the result. Weighted `ItemCount` values can demonstrate sampling; a low-volume run with no sampled rows is inconclusive, not proof of failed processing. Compare repeated billable `Usage` windows before/after the change, accounting for traffic and ingestion delay, rather than promising a fixed cost reduction.
 
-Retain Prometheus/Grafana/Logs/Application Insights for labs 6–10. Stop port-forwards with Ctrl+C. Final cleanup: remove the telemetry patch/PodMonitor through Git, reconcile, delete the `orders-telemetry` Secret, disable the metrics add-on with `az aks update -g "$(lab_value ResourceGroup)" -n "$(lab_value ClusterName)" --disable-azure-monitor-metrics`, and use root resource cleanup for telemetry resources. Do not delete the shared Log Analytics workspace mid-course. Workspace retention and Grafana billing remain even when AKS is stopped; daily ingestion caps/budget emails are not guaranteed spending caps.
+Retain Prometheus/Grafana/Logs/Application Insights for labs 15 and 20–23. Stop port-forwards with Ctrl+C. Final cleanup: remove the telemetry patch/PodMonitor through Git, reconcile, delete the `orders-telemetry` Secret, disable the metrics add-on with `az aks update -g "$(lab_value ResourceGroup)" -n "$(lab_value ClusterName)" --disable-azure-monitor-metrics`, and use root resource cleanup for telemetry resources. Do not delete the shared Log Analytics workspace mid-course. Workspace retention and Grafana billing remain even when AKS is stopped; daily ingestion caps/budget emails are not guaranteed spending caps.
 
 </details>
 
@@ -447,7 +449,7 @@ Retain Prometheus/Grafana/Logs/Application Insights for labs 6–10. Stop port-f
 <details>
 <summary>Model answer: Which SLI represents “order success”?</summary>
 
-Separate API acceptance from durable business completion and queue age. A 202 and an empty CPU graph do not prove fulfillment. Lab 8 adds durable lookup/idempotency.
+Separate API acceptance from durable business completion and queue age. A 202 and an empty CPU graph do not prove fulfillment. Lab 21 adds durable lookup/idempotency.
 
 </details>
 
