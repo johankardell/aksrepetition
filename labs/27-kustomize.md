@@ -547,4 +547,4 @@ unset Work
 
 ---
 
-**Course complete:** [Return to the lab index](../README.md).
+**Next lab (optional):** [Lab 28 - Overlay overlap incident](28-overlay-overlap.md). This isolated fault exercise provisions billable Azure resources; review its prerequisites and safety boundary.

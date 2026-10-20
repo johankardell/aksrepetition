@@ -16,7 +16,7 @@ GUIDES = [ROOT / "README.md", ROOT / ".github/copilot-instructions.md", *sorted(
 class LabCommandsTests(unittest.TestCase):
     def test_curriculum_inventory_and_navigation(self):
         guides = sorted((ROOT / "labs").glob("*.md"))
-        expected = [*range(1, 7), *range(10, 16), *range(20, 28)]
+        expected = [*range(1, 7), *range(10, 16), *range(20, 29)]
         self.assertEqual([int(guide.name[:2]) for guide in guides], expected)
         readme = (ROOT / "README.md").read_text()
         for guide in guides:
@@ -112,7 +112,7 @@ class LabCommandsTests(unittest.TestCase):
                     compile(block, str(guide), "exec")
 
     def test_cumulative_guides_preserve_active_bastion_kubeconfigs(self):
-        cumulative_numbers = {*range(1, 7), *range(10, 16), *range(20, 25)}
+        cumulative_numbers = {*range(1, 7), *range(10, 16), *range(20, 25), 28}
         for guide in sorted((ROOT / "labs").glob("*.md")):
             if int(guide.name[:2]) not in cumulative_numbers:
                 continue

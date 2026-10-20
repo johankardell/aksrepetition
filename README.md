@@ -1,12 +1,14 @@
 # Enterprise AKS refresher - 2026
 
-Six beginner labs, six intermediate labs, four advanced labs and four optional specialist exercises for operating AKS well. Learn Azure responsibilities, private access, identity, capacity, delivery and recovery through a real platform, not a generic pods-and-services tour.
+Six beginner labs, six intermediate labs, four advanced labs and five optional specialist exercises for operating AKS well. Learn Azure responsibilities, private access, identity, capacity, delivery and recovery through a real platform, not a generic pods-and-services tour.
 
 **New to AKS operations? Start with [lab 1](labs/01-aks-readiness.md)** and follow labs 1-6, then [lab 10's beginner resume path](labs/10-baseline.md#entry-paths). Beginners provision the **same full enterprise foundation** in lab 2; beginner-friendly does not mean a smaller or inexpensive cluster. Lab 6 leaves it ready for intermediate work without redeploying or rerendering.
 
 **Experienced refresher? Start fresh with [lab 10](labs/10-baseline.md#entry-paths).** Run intermediate labs 10-15, then advanced labs 20-23 in order. They progressively mutate one environment; the advanced track is not an independent starting point. Numbers 7-9 and 16-19 are intentionally unused.
 
 [Lab 24](labs/24-kaito.md) is an optional cumulative extension after lab 15, before final teardown, with separate GPU quota and budget approval; labs 20-23 are not prerequisites. Labs [25](labs/25-rabbitmq-container-storage.md) and [26](labs/26-confidential-compute.md) create dedicated clusters with their own prerequisites and can run independently. [Lab 27](labs/27-kustomize.md) is a self-contained, offline Kustomize exercise with easy, medium and hard tiers; its specialist numbering does not make it advanced-only.
+
+[Lab 28](labs/28-overlay-overlap.md) is a self-contained networking fault exercise: a private HTTP service in a peered VNet deliberately collides with a pod IP. It compares independent VM and pod requests, then removes the overlap and verifies recovery. Its dedicated cluster, VNets, VMs and Bastion must never connect to the cumulative environment or corporate networks.
 
 Each task keeps its challenge prompt visible and provides a collapsed **Solution** block with the worked commands, explanations and recovery steps. Expand it when you need help; customer questions have separate collapsed **Model answer** blocks. Prerequisites, safety boundaries and required exit evidence remain visible. Collapsing a block only hides its contents in the rendered guide; it does not make any setup task optional. Use GitHub's rendered Markdown view to expand the blocks.
 
@@ -49,6 +51,7 @@ Each task keeps its challenge prompt visible and provides a collapsed **Solution
 | [25. RabbitMQ storage density](labs/25-rabbitmq-container-storage.md) | Evaluate durable messaging placement and disk-attachment pressure | RabbitMQ Cluster Operator, quorum queues, Azure Disk CSI, Azure Container Storage, local NVMe |
 | [26. Confidential compute placement](labs/26-confidential-compute.md) | Avoid wasting confidential capacity on ordinary workloads | AMD SEV-SNP CVMs, taints, tolerations, affinity, autoscaling |
 | [27. Progressive Kustomize practice](labs/27-kustomize.md) | Build reusable manifests at beginner through advanced levels | Bases, overlays, generators, patches, replacements, components |
+| [28. Overlay overlap incident](labs/28-overlay-overlap.md) | Diagnose Connected peering with broken pod connectivity and repair the address plan | Azure CNI Overlay/Cilium, VNet peering, source NAT, private HTTP, NIC/subnet recovery |
 
 ### Existing learner migration
 
@@ -66,6 +69,8 @@ All former topics retain their order and prerequisites; only their canonical gui
 These are **lab implementation materials, not a certified production landing zone**. The workload/platform path targets supported GA features in Azure public cloud, with one explicitly accepted **preview dependency: native Bastion access to the private AKS API through `aks-preview`**. This is the primary Kubernetes management path from beginner lab 3 through labs 10-15, 20-23 and the cumulative lab-24 extension; do not claim the whole curriculum is GA-only. Existing core labs source review: **2026-09-10**; Bastion integration checked **2026-10-01**; optional KAITO extension: **2026-09-14**; optional storage and confidential-compute extensions: **2026-09-23**. Beginner guides reuse that foundation and require runtime discovery of supported versions and capacity. Live deployment, regional capacity, end-to-end recovery, and Azure charges have **not** been verified in your subscription. Check the runtime prerequisites before applying anything.
 
 The sample has **no end-user authentication**. Use only synthetic orders and private access until the restricted public-origin capstone. Workload identity authenticates the application to Azure; it does not authenticate the application's customers. A real customer solution needs end-user/API authentication, authorization, abuse controls, data classification, and its own threat model.
+
+Lab 28 independently uses native Bastion with the same preview exception. Its overlap is intentional fault injection outside the supported address plan, not an exception permitting overlapping networks in the cumulative platform.
 
 The baseline enables private AKS management immediately. ACR, Service Bus and Key Vault start with authenticated public data endpoints during bootstrap; lab 12 creates Private Link and disables those public endpoints. This deliberate intermediate state is **not the finished enterprise baseline**. Do not import business data or treat beginner completion or lab 10 alone as production-ready.
 
@@ -93,6 +98,7 @@ Use a dedicated subscription. Agree the subscription ID, primary and secondary r
 | KAITO GPU inference | 24 (optional) | One desired A100 GPU node; quota/capacity and explicit timed cleanup required. Workspace deletion does not delete GPU node pools. |
 | RabbitMQ storage comparison | 25 (optional) | Dedicated AKS cluster with three storage-optimized nodes. Local NVMe is ephemeral; the optional Elastic SAN extension has a substantial minimum provisioned capacity. |
 | Confidential compute | 26 (optional) | Dedicated AKS cluster with ordinary and AMD SEV-SNP confidential VM pools. CVM SKU quota, regional availability and idle confidential nodes drive cost. |
+| Overlay overlap incident | 28 (optional) | Dedicated two-node AKS cluster, two private Ubuntu VMs/disks, NAT Gateway/public IP, Bastion Standard/two scale units/public IP and peering traffic. An intentional unsupported overlap is confined to this disposable boundary. |
 
 Create Azure Cost Management budgets and alerts for the subscription/resource groups before starting. **Budgets are notifications, not spending caps.** See [Azure pricing calculator](https://azure.microsoft.com/pricing/calculator/) using your agreement and regions, and [budget guidance](https://learn.microsoft.com/azure/cost-management-billing/costs/tutorial-acm-create-budgets). No fixed currency estimate is supplied because region, agreement, duration, and traffic dominate it.
 
@@ -245,7 +251,7 @@ The `aks` RSA key supplies the supported node Linux profile; its passphrase-prot
 - `ops/`, `.github/workflows/`, `gitops/`: delivery, monitoring and scaling assets introduced by labs 13-15.
 - `advanced/`: governance, data, upgrade and regional recovery assets introduced by labs 20-23, plus the optional lab-24 KAITO manifests.
 - `labs/01-*` through `labs/06-*`: guided beginner operations using the shared foundation and helpers.
-- `labs/25-*`, `labs/26-*`, `labs/27-*`: self-contained specialist guides; their manifests are created in disposable local working folders and are not dependencies of the cumulative environment.
+- `labs/25-*` through `labs/28-*`: self-contained specialist guides; their manifests are created in disposable local working folders and are not dependencies of the cumulative environment. Lab 27 is offline; lab 28 uses its own private cluster/Bastion and deliberately conflicting peer network.
 - `rendered/`, `evidence/`, `.artifacts/`: local generated output, excluded from Git.
 
 **Ownership changes are explicit.** Beginner labs 5-6 and intermediate labs 10-12 use imperative commands and rendered templates to expose the mechanics. Lab 13 adopts the workload into GitOps. After adoption, change the Git source or explicitly suspend/resume the named Flux reconciliation for a fault exercise. Platform infrastructure stays outside the application's Flux permissions.
@@ -282,7 +288,7 @@ Save evidence of each lab's exit criteria and Git commit once GitOps exists. Clo
 
 To pause build-VM compute, first close API/SSH sessions and any runner, then run `az vm deallocate --ids "$(output_value buildVmId)"` from the original workstation after sourcing `use-lab.sh`. Use `az vm start --ids "$(output_value buildVmId)"` before reconnecting. Guest shutdown alone is not Azure deallocation. The disk, firewall and Bastion still cost money; finish VM-dependent cleanup and retain evidence before final resource-group deletion.
 
-Do not delete cumulative resources after individual labs. If you ran lab 24, complete its Workspace and GPU-pool cleanup before pausing or final teardown. Labs 25 and 26 use their own resource groups and private management prerequisites, not the cumulative Bastion sessions; complete each guide's teardown instead of leaving specialist node pools or storage resources running. Lab 27 is local and disposable. At final teardown, follow lab 23 and lab 21 cleanup first **if those stages were reached**: remove Fleet membership and global routing, stop/delete backup protection using the documented retention process, remove diagnostic/monitoring associations and external role assignments, and handle database/volume backups intentionally. For beginner-only environments, use the next section instead. Keep Bastion available until API-dependent cleanup is complete, then disconnect all current-shell tunnels and close any foreground tunnel-owner subshells before deleting their Bastion hosts/public IPs. Inspect every resource group before deletion, from the original workstation rather than the VM being deleted:
+Do not delete cumulative resources after individual labs. If you ran lab 24, complete its Workspace and GPU-pool cleanup before pausing or final teardown. Labs 25 and 26 use their own resource groups and private management prerequisites, not the cumulative Bastion sessions; complete each guide's teardown instead of leaving specialist node pools or storage resources running. Lab 27 is local and disposable. Lab 28 has its own tagged group and native Bastion session; complete its confirmed teardown, including its NAT/Bastion and private VMs, even if the collision exercise failed partway. At final teardown, follow lab 23 and lab 21 cleanup first **if those stages were reached**: remove Fleet membership and global routing, stop/delete backup protection using the documented retention process, remove diagnostic/monitoring associations and external role assignments, and handle database/volume backups intentionally. For beginner-only environments, use the next section instead. Keep Bastion available until API-dependent cleanup is complete, then disconnect all current-shell tunnels and close any foreground tunnel-owner subshells before deleting their Bastion hosts/public IPs. Inspect every resource group before deletion, from the original workstation rather than the VM being deleted:
 
 ```bash
 source ./scripts/use-lab.sh
