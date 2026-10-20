@@ -6,6 +6,8 @@ import json
 import os
 import pathlib
 import re
+import socket
+import ssl
 import subprocess
 import sys
 import tempfile
@@ -36,7 +38,7 @@ class OptionalLabsTests(unittest.TestCase):
 
     def test_resource_group_gate_rejects_reuse_and_azure_errors(self):
         for guide in ("25-rabbitmq-container-storage.md", "26-confidential-compute.md",
-                      "28-overlay-overlap.md"):
+                      "28-overlay-overlap.md", "29-api-private-connectivity.md"):
             block = bash_block(guide, 'if [[ "$GroupExists" != false ]]')
             guard = block[block.index("GroupExists=$("):block.index("\nprintf 'SubscriptionId=")]
             for exists, status in (("false", "0"), ("true", "0"), ("", "22"), ("false", "22")):
@@ -46,6 +48,146 @@ class OptionalLabsTests(unittest.TestCase):
                         Exists=exists, Status=status, ResourceGroup="rg-test",
                     )
                     self.assertEqual(result.returncode == 0, exists == "false" and status == "0")
+
+    def test_api_probe_requires_correct_dns_tls_authorization_and_marker(self):
+        block = bash_block("29-api-private-connectivity.md", 'cat > "$Work/probe.py"')
+        code = re.search(r"<<'PY'\n(.*?)^PY$", block, re.M | re.S)[1]
+        marker = "lab29-0123456789abcdef"
+        host = "synthetic.private.azmk8s.io"
+        address = "10.91.1.4"
+        for mode, problem, valid in (
+            ("direct", "none", True),
+            ("dns", "none", True),
+            ("dns", "wrong-dns", False),
+            ("dns", "multiple-dns", False),
+            ("dns", "dns-error", False),
+            ("direct", "tls", False),
+            ("direct", "http-401", False),
+            ("direct", "http-403", False),
+            ("direct", "wrong-marker", False),
+            ("direct", "wrong-kind", False),
+            ("direct", "timeout", False),
+            ("unreachable", "refused", True),
+            ("unreachable", "timeout", True),
+            ("unreachable", "none", False),
+            ("unreachable", "dns-error", False),
+            ("unreachable", "tls", False),
+        ):
+            with self.subTest(mode=mode, problem=problem):
+                config = {"host": host, "ip": address, "mode": mode, "marker": marker,
+                          "ca": base64.b64encode(b"synthetic-ca").decode()}
+                payload = base64.b64encode(json.dumps(config).encode()).decode()
+                result = {"kind": "ConfigMap", "data": {"run": marker}}
+                if problem == "wrong-marker":
+                    result["data"]["run"] = "other-cluster"
+                elif problem == "wrong-kind":
+                    result["kind"] = "Secret"
+                response = io.StringIO(json.dumps(result))
+                response.status = int(problem[-3:]) if problem.startswith("http-") else 200
+                token_response = io.StringIO(json.dumps({"access_token": "never-print-this-token"}))
+                output = io.StringIO()
+                with patch("sys.argv", ["probe.py", payload]), \
+                        patch("socket.create_connection") as connect, \
+                        patch("socket.getaddrinfo") as resolve, \
+                        patch("ssl.create_default_context") as tls, \
+                        patch("http.client.HTTPSConnection") as https, \
+                        patch("urllib.request.build_opener") as opener, \
+                        contextlib.redirect_stdout(output):
+                    resolve.return_value = [(None, None, None, None, (address, 443))]
+                    if problem == "wrong-dns":
+                        resolve.return_value = [(None, None, None, None, ("10.90.16.4", 443))]
+                    elif problem == "multiple-dns":
+                        resolve.return_value.append((None, None, None, None, ("10.90.16.4", 443)))
+                    elif problem == "dns-error":
+                        resolve.side_effect = socket.gaierror(socket.EAI_NONAME, "no DNS")
+                        connect.side_effect = socket.gaierror(socket.EAI_NONAME, "no DNS")
+                    elif problem == "refused":
+                        connect.side_effect = ConnectionRefusedError(errno.ECONNREFUSED, "refused")
+                    elif problem == "timeout":
+                        connect.side_effect = TimeoutError("timeout")
+                    elif problem == "tls":
+                        tls.return_value.wrap_socket.side_effect = ssl.SSLCertVerificationError("bad cert")
+                        if mode == "unreachable":
+                            connect.side_effect = ssl.SSLCertVerificationError("bad cert")
+                    https.return_value.getresponse.return_value = response
+                    opener.return_value.open.return_value.__enter__.return_value = token_response
+                    if valid:
+                        exec(compile(code, "api-probe.py", "exec"), {})
+                    else:
+                        with self.assertRaises((SystemExit, OSError)):
+                            exec(compile(code, "api-probe.py", "exec"), {})
+                    if valid and mode != "unreachable":
+                        tls.assert_called_once_with(cadata="synthetic-ca")
+                        self.assertEqual(tls.return_value.wrap_socket.call_args.kwargs["server_hostname"], host)
+                        self.assertEqual(https.return_value.request.call_args.args[:2],
+                                         ("GET", "/api/v1/namespaces/api-connectivity/configmaps/run-marker"))
+                    if mode == "unreachable" or problem in ("wrong-dns", "multiple-dns", "dns-error", "tls", "timeout"):
+                        opener.assert_not_called()
+                self.assertNotIn("never-print-this-token", output.getvalue())
+                if valid:
+                    self.assertIn(f"API_UNREACHABLE:{marker}" if mode == "unreachable" else f"API_OK:{marker}",
+                                  output.getvalue())
+                else:
+                    self.assertNotIn("API_OK:", output.getvalue())
+                    self.assertNotIn("API_UNREACHABLE:", output.getvalue())
+
+    def test_api_run_command_requires_probe_marker_and_propagates_failures(self):
+        block = bash_block("29-api-private-connectivity.md", "probe_vm()")
+        function = re.search(r"probe_vm\(\) \{.*?\n\}", block, re.S)[0]
+        marker = "lab29-0123456789abcdef"
+        mocks = """
+assert_lab() { return "$GuardStatus"; }
+make_probe() { return "$MakeStatus"; }
+az() { printf '%s' "$Result"; return "$AzureStatus"; }
+"""
+        with tempfile.TemporaryDirectory() as folder:
+            for mode, message, guard, make, azure, valid in (
+                ("dns", f"API_OK:{marker}", "0", "0", "0", True),
+                ("unreachable", f"API_UNREACHABLE:{marker}", "0", "0", "0", True),
+                ("dns", "Provisioning succeeded", "0", "0", "0", False),
+                ("dns", "API_OK:other-run", "0", "0", "0", False),
+                ("dns", f"API_UNREACHABLE:{marker}", "0", "0", "0", False),
+                ("unreachable", f"API_OK:{marker}", "0", "0", "0", False),
+                ("dns", f"API_OK:{marker}", "17", "0", "0", False),
+                ("dns", f"API_OK:{marker}", "0", "18", "0", False),
+                ("dns", f"API_OK:{marker}", "0", "0", "19", False),
+            ):
+                with self.subTest(mode=mode, message=message, guard=guard, make=make, azure=azure):
+                    result = self.run_bash(
+                        mocks + function + f"\nprobe_vm api-remote {mode} 10.91.1.4 api.example\n",
+                        Work=folder, Marker=marker, ResourceGroup="rg-test", GuardStatus=guard,
+                        MakeStatus=make, AzureStatus=azure, Result=json.dumps({"value": [{"message": message}]}),
+                    )
+                    self.assertEqual(result.returncode == 0, valid, result.stderr)
+
+    def test_api_cleanup_requires_ownership_confirmation_and_complete_deletion(self):
+        block = bash_block("29-api-private-connectivity.md", "az group delete ")
+        mocks = """
+assert_lab() { return "$GuardStatus"; }
+az() {
+  if [[ "$*" == "group delete "* ]]; then printf 'DELETE:%s\\n' "$*"
+  elif [[ "$*" == "group exists --name rg-test" ]]; then printf '%s' "$GroupExistsAfter"
+  elif [[ "$*" == "group exists --name node-group" ]]; then printf '%s' "$NodeGroupExistsAfter"
+  fi
+}
+"""
+        for guard, approval, exists, nodes, valid in (
+            ("0", "rg-test", "false", "false", True),
+            ("17", "rg-test", "false", "false", False),
+            ("0", "another-group", "false", "false", False),
+            ("0", "rg-test", "true", "false", False),
+            ("0", "rg-test", "false", "true", False),
+        ):
+            with self.subTest(guard=guard, approval=approval, exists=exists, nodes=nodes):
+                result = subprocess.run(
+                    ["bash", "-c", "set -euo pipefail\n" + mocks + block],
+                    env={**os.environ, "GuardStatus": guard, "GroupExistsAfter": exists,
+                         "NodeGroupExistsAfter": nodes, "NodeResourceGroup": "node-group",
+                         "ResourceGroup": "rg-test"},
+                    input=approval + "\n", text=True, capture_output=True, timeout=10,
+                )
+                self.assertEqual(result.returncode == 0, valid, result.stderr)
+                self.assertEqual("DELETE:" in result.stdout, guard == "0" and approval == "rg-test")
 
     def test_overlap_address_selection_rejects_reserved_and_unplanned_collisions(self):
         block = bash_block("28-overlay-overlap.md", "PeerCidr=$(python3")
@@ -114,8 +256,7 @@ class OptionalLabsTests(unittest.TestCase):
                     self.assertNotIn("SERVICE_OK:", output.getvalue())
                     self.assertNotIn("EXPECTED_NETWORK_FAILURE:", output.getvalue())
 
-    def test_overlap_group_guard_rejects_wrong_context_and_ownership(self):
-        block = bash_block("28-overlay-overlap.md", "assert_lab()")
+    def test_isolated_group_guards_reject_wrong_context_and_ownership(self):
         mocks = """
 az() {
   if [[ "$*" == "account show "* ]]; then printf '%s' "$Account"; return "$AzureStatus"
@@ -125,24 +266,26 @@ az() {
 }
 """
         account = {"id": "subscription", "tenantId": "tenant"}
-        group = {"tags": {"purpose": "aks-overlay-overlap-lab", "run": "lab28-marker"}}
-        for problem in ("none", "subscription", "tenant", "purpose", "run", "azure-error", "malformed"):
-            context = dict(account)
-            resource = json.loads(json.dumps(group))
-            if problem == "subscription":
-                context["id"] = "other"
-            elif problem == "tenant":
-                context["tenantId"] = "other"
-            elif problem in ("purpose", "run"):
-                resource["tags"][problem] = "other"
-            with self.subTest(problem=problem):
-                result = self.run_bash(
-                    mocks + block, Account="invalid-json" if problem == "malformed" else json.dumps(context),
-                    Group=json.dumps(resource), AzureStatus="22" if problem == "azure-error" else "0",
-                    SubscriptionId="subscription", TenantId="tenant", ResourceGroup="rg-test",
-                    Marker="lab28-marker",
-                )
-                self.assertEqual(result.returncode == 0, problem == "none", result.stderr)
+        for guide, purpose in (("28-overlay-overlap.md", "aks-overlay-overlap-lab"),
+                               ("29-api-private-connectivity.md", "aks-api-private-lab")):
+            block = bash_block(guide, "assert_lab()")
+            for problem in ("none", "subscription", "tenant", "purpose", "run", "azure-error", "malformed"):
+                context = dict(account)
+                resource = {"tags": {"purpose": purpose, "run": "synthetic-marker"}}
+                if problem == "subscription":
+                    context["id"] = "other"
+                elif problem == "tenant":
+                    context["tenantId"] = "other"
+                elif problem in ("purpose", "run"):
+                    resource["tags"][problem] = "other"
+                with self.subTest(guide=guide, problem=problem):
+                    result = self.run_bash(
+                        mocks + block, Account="invalid-json" if problem == "malformed" else json.dumps(context),
+                        Group=json.dumps(resource), AzureStatus="22" if problem == "azure-error" else "0",
+                        SubscriptionId="subscription", TenantId="tenant", ResourceGroup="rg-test",
+                        Marker="synthetic-marker",
+                    )
+                    self.assertEqual(result.returncode == 0, problem == "none", result.stderr)
 
     def test_overlap_control_requires_remote_marker_not_just_run_command_success(self):
         block = bash_block("28-overlay-overlap.md", "probe_control()")

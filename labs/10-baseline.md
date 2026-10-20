@@ -49,6 +49,17 @@ The administrator reaches the private API through the Bastion native tunnel, the
 
 Private control-plane access does not prevent a public LoadBalancer or gateway from exposing an application. Here the initial Service is ClusterIP and access is by port-forward; lab 12 adds internal ingress. The dependency public endpoints are still enabled during bootstrap and are not the finished private-network design.
 
+Compare the API architectures separately from the administrator's connectivity:
+
+| API design | Distinction |
+|---|---|
+| Public endpoint with authorized IP ranges | Source-IP filtering, not private access. |
+| Private Link-based private cluster (this foundation) | AKS creates the managed API private endpoint and private DNS. No extra API endpoint deployment is required here. |
+| API Server VNet Integration | Projects the API endpoint into a delegated subnet behind an internal load balancer; node/API traffic stays private while public client access can be enabled or disabled. |
+| VNet Integration with PLS and a consumer PE | Adds private API access from another VNet without peering, with consumer-side DNS. |
+
+Bastion, peering and VPN/ExpressRoute are client access paths, not replacements for these architectures. A public FQDN is a DNS choice, not proof of public API reachability. **Optional [lab 29](29-api-private-connectivity.md)** demonstrates public-to-private cutover and an unpeered consumer private endpoint on a separate disposable cluster. Do not convert or expose this cumulative cluster to follow that exercise.
+
 </details>
 
 ### 2. Discover, then select a supported version

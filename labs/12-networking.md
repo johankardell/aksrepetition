@@ -6,6 +6,8 @@
 
 Run Kubernetes commands through lab 10's active native Bastion session. This lab also requires the approved private data-plane/build host: a Bastion API tunnel does not make workstation `dig`, `curl`, `podman` or secret operations reach private endpoints. Run the mixed command blocks on that private host with its own Bastion API session. Supply routing/DNS before disabling public access; keep Bastion's subnet off the AKS node route table.
 
+**Optional control-plane comparison:** [Lab 29 - Switch API access from public to private](29-api-private-connectivity.md) uses a **separate disposable cluster** to explore API Server VNet Integration, public-to-private cutover and a private endpoint in an unpeered operations VNet. The cumulative API is already private through AKS-managed Private Link; this lab's endpoints are for application dependencies, not an API migration. Skip lab 29 without affecting the handoff to lab 13.
+
 ## Directives
 
 ### 1. Create private service endpoints with DNS

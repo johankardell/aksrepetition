@@ -16,7 +16,7 @@ GUIDES = [ROOT / "README.md", ROOT / ".github/copilot-instructions.md", *sorted(
 class LabCommandsTests(unittest.TestCase):
     def test_curriculum_inventory_and_navigation(self):
         guides = sorted((ROOT / "labs").glob("*.md"))
-        expected = [*range(1, 7), *range(10, 16), *range(20, 29)]
+        expected = [*range(1, 7), *range(10, 16), *range(20, 30)]
         self.assertEqual([int(guide.name[:2]) for guide in guides], expected)
         readme = (ROOT / "README.md").read_text()
         for guide in guides:

@@ -600,4 +600,4 @@ The overlapping stage intentionally violates the supported address plan. Region/
 
 ---
 
-**Course complete:** [Return to the lab index](../README.md).
+**Next lab (optional):** [Lab 29 - Switch API access from public to private](29-api-private-connectivity.md).
