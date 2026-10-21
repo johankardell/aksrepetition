@@ -4,6 +4,19 @@
 
 **Outcome:** a capacity and placement worksheet for the existing pools, including availability, network and storage constraints.
 
+## Lab contract
+
+| Field | This lab |
+|---|---|
+| Entry | Lab 3 private API and identity checks passed. |
+| Host and identity | Private build VM; operator's verified current-shell Bastion session, read-only Azure/Kubernetes inspection. |
+| Time | Estimate: 45–60 minutes active; 0–10 minutes API/metrics wait. |
+| Cost | No new resources or resizing; existing pools and foundation keep billing. |
+| Changes | None to live resources; operator owns capacity, zone, address and storage worksheet. |
+| Exit and re-entry | Retain actual requests/allocatable/quota and storage policies; refresh observations rather than resize to match an old worksheet. |
+
+Use the [session, evidence and cost operating contract](../docs/operations.md) and [stage map](../docs/state.md). Times are planning estimates, not measured results.
+
 ## Prerequisites and resource boundary
 
 Complete [lab 3](03-access-and-identity.md). Run Bash at the repository root on the private build VM with the active, verified native Bastion session. Reconnect and recheck context if returning.

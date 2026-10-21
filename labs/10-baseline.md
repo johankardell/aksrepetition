@@ -4,9 +4,22 @@
 
 **Outcome:** a private AKS cluster with repeatable infrastructure, native Azure Bastion API access, Entra authentication, Cilium Overlay networking, separate system/application capacity and a synthetic workload. Bastion's AKS native tunnel is the explicitly accepted preview dependency; the cluster API itself remains private. This is stage one, not yet the completed private-dependency design.
 
+## Lab contract
+
+| Field | This lab |
+|---|---|
+| Entry | Fresh experienced bootstrap **or** verified lab 6 handoff; choose the entry path below. |
+| Host and identity | Bootstrap workstation then private build VM; infrastructure/role operator, Entra user API access and registry-scoped publisher. |
+| Time | Estimate: fresh 2–3 hours active plus 30–90 minutes Azure wait; beginner resume 30–60 minutes active plus 0–10 minutes checks. |
+| Cost | Fresh starts the full six-node foundation, Bastion, Firewall, build VM and Premium dependencies; resume adds no infrastructure. |
+| Changes | Platform owns bootstrap; operator owns the initial rendered workload. Resume preserves both without redeployment/rerendering. |
+| Exit and re-entry | TLS/context, pools, workload and probes verified; locate the current stage rather than resetting a progressed environment. |
+
+Use the [session, evidence and cost operating contract](../docs/operations.md) and [stage map](../docs/state.md). Times are planning estimates, not measured results.
+
 ## Entry paths
 
-**Fresh experienced start:** beginners are not a prerequisite. Complete the README bootstrap and all directives below to create the foundation once. This retains the full intermediate baseline exercise.
+**Fresh experienced start:** beginners are not a prerequisite. Complete the [bootstrap contract](../docs/operations.md#bootstrap-configuration) and all directives below to create the foundation once. This retains the full intermediate baseline exercise.
 
 **Completed beginner labs 1-6:** reuse the same foundation and rendered workload. Complete the read-only [lab 6 handoff checks](06-troubleshooting-and-lifecycle.md#4-assemble-the-handoff-evidence), including [lab 3's TLS/context checks](03-access-and-identity.md#3-verify-api-connectivity-tls-and-authorization), and compare the evidence with this lab's exit criteria. If disconnected, reconnect using the sourceable Bastion helper before checking; do not overwrite its active kubeconfig.
 
@@ -16,13 +29,15 @@ For this resume path, complete directive 1, directive 2's discovery/review (not 
 
 ## Prerequisites and resource boundary
 
-For a fresh start, complete the [README bootstrap](../README.md#bootstrap-configuration); beginner graduates retain their existing configuration. Have a Linux workstation for Bastion access. Foundation supplies a private Ubuntu build VM and peered Azure Firewall for the later data-plane tasks, without a VPN or VM public IP. Confirm spending for six worker VMs, the small build VM, AKS Standard tier, ACR Premium, Service Bus Premium, Log Analytics, **Bastion Standard with two scale units/public IP**, and **Azure Firewall Standard/public IP from foundation deployment onward (lab 2 or a fresh lab 10)**. Check at least 24 node vCPUs plus surge headroom and the build VM's additional two B-series vCPUs. Use only the dedicated resource group.
+For a fresh start, complete the [bootstrap configuration](../docs/operations.md#bootstrap-configuration); beginner graduates retain their existing configuration. Have a Linux workstation for Bastion access. Foundation supplies a private Ubuntu build VM and peered Azure Firewall for the later data-plane tasks, without a VPN or VM public IP. Confirm spending for six worker VMs, the small build VM, AKS Standard tier, ACR Premium, Service Bus Premium, Log Analytics, **Bastion Standard with two scale units/public IP**, and **Azure Firewall Standard/public IP from foundation deployment onward (lab 2 or a fresh lab 10)**. Check at least 24 node vCPUs plus surge headroom and the build VM's additional two B-series vCPUs. Use only the dedicated resource group.
 
 Files: `infra/main.bicep`, `infra/bastion.bicep`, `infra/workload-identities.bicep`, `scripts/deploy-foundation.sh`, `scripts/activate-aks-bastion.sh`, `scripts/connect-aks-bastion.sh`, `app/`, `k8s/base/`. Run these solutions in Bash on Linux at the repository root, with Azure CLI 2.90+, jq, kubectl, kubelogin, Podman, dig, getent, OpenSSL and curl installed.
 
 Keep strict mode enabled for the following solutions. `use-lab.sh` supplies `Lab` and `Outputs` as JSON strings, `Root` as the absolute repository root, `lab_value KEY` for a settings value, and `output_value KEY` for a foundation output's `.value`. Deployment-derived resource names must be populated by that helper, not guessed. Execute other helpers with `bash ./path/name.sh` and their named `--kebab-case` options.
 
 ## Directives
+
+Before lab 11, [lab 27 Tier 1](27-kustomize.md#tier-1---easy-create-and-transform-a-base) is recommended offline preparation for editing the accumulated Kustomize base. It teaches composition, not deployment or Flux ownership, and does not alter this handoff.
 
 ### 1. Explain the platform before deploying
 
@@ -170,9 +185,9 @@ az deployment group create -g "$(lab_value ResourceGroup)" -n bastion -f ./infra
   -p "prefix=$(lab_value Prefix)" "location=$(lab_value Location)" "vnetName=$VnetName" -o none
 ```
 
-The Bastion module does not change AKS or its identities. Keep `AzureBastionSubnet` at least /26; foundation creates it. If NSGs were added, follow Bastion's documented required flows rather than attaching the node egress UDR. Existing operators need Bastion resource read access plus their AKS credential/Kubernetes roles; **Reader alone does not authorize kubectl**. This path is for Standard AKS, not Automatic or a node-resource-group-lockdown configuration unsupported by native tunneling. Before the build/publish task, follow [README's private build VM setup](../README.md#private-build-vm), transfer current settings/public keys, sign into Entra on the VM and start its native AKS session. Run the remaining mixed command blocks there so later private ACR, application HTTPS and PostgreSQL remain reachable.
+The Bastion module does not change AKS or its identities. Keep `AzureBastionSubnet` at least /26; foundation creates it. If NSGs were added, follow Bastion's documented required flows rather than attaching the node egress UDR. Existing operators need Bastion resource read access plus their AKS credential/Kubernetes roles; **Reader alone does not authorize kubectl**. This path is for Standard AKS, not Automatic or a node-resource-group-lockdown configuration unsupported by native tunneling.
 
-Before API activation, use [README's private build VM setup](../README.md#private-build-vm) to open Bastion SSH, transfer current settings/public keys, and sign into Entra from the VM's checkout. The remaining command blocks run on that VM; no workstation Podman or VPN is needed. Activate a native tunnel in its current shell:
+Before API activation, use the [private build VM setup](../docs/operations.md#private-build-vm) to open Bastion SSH, transfer current settings/public keys, and sign into Entra from the VM's checkout. The remaining command blocks run on that VM so later private ACR, HTTPS and PostgreSQL are reachable; no workstation Podman or VPN is needed. Activate a native tunnel in its current shell:
 
 ```bash
 source ./scripts/activate-aks-bastion.sh
@@ -202,7 +217,7 @@ Expected: loopback API endpoint, original private hostname for TLS verification,
 
 From a workstation without VNet routing, direct private API access remains unavailable even while the Bastion tunnel works. From the approved private data-plane host, retain `dig "$fqdn"`, `getent ahostsv4 "$fqdn"` and private TCP-443 reachability evidence separately. Local private DNS resolution is not required for the remote workstation's API tunnel. Bastion does **not** supply private ACR/Key Vault/PostgreSQL/application access.
 
-For another terminal's port-forward or diagnostics, follow the [shared-session recipe](../README.md#bastion-sessions-and-data-plane-access): export the exact temporary `KUBECONFIG` from the owner shell on the same host while the tunnel remains alive. Reconnect with the helper after `disconnect_aks_bastion`; do not reuse its deleted file.
+For another terminal's port-forward or diagnostics, follow the [shared-session recipe](../docs/operations.md#bastion-sessions-and-data-plane-access): export the exact temporary `KUBECONFIG` from the owner shell on the same host while the tunnel remains alive. Reconnect with the helper after `disconnect_aks_bastion`; do not reuse its deleted file.
 
 </details>
 

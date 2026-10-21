@@ -2,13 +2,35 @@
 
 **Level:** advanced.
 
-**Customer:** durable order processing, shared files and a tested recovery plan. **Time:** 4–6 hours plus provisioning/backup time. **Result:** passwordless PostgreSQL, Disk/Files CSI evidence, an actual AKS Backup restore with a matching hash, and a separate PostgreSQL point-in-time restore.
+**Customer:** durable order processing, shared files and a tested recovery plan. **Result:** passwordless PostgreSQL, Disk/Files CSI evidence, an actual AKS Backup restore with a matching hash, and a separate PostgreSQL point-in-time restore.
+
+## Lab contract
+
+| Field | This lab |
+|---|---|
+| Entry | Labs 10–15 and 20; approved regional Backup/PostgreSQL support and private data path. |
+| Host and identity | Private VM with sourced Bastion and PostgreSQL 17+ clients; human SQL administrator, platform/backup operator and distinct workload principals. |
+| Time | Estimate: 4–6 hours active plus 1–3 hours database, backup and restore waits; service queues may take longer. |
+| Cost | PostgreSQL, private endpoints, Disk/Files, backup metadata/snapshots and separate restore servers/groups. |
+| Changes | App Git owns database configuration; platform owns storage/backup; SQL owner owns data/principal mapping and restore decisions. |
+| Exit and re-entry | One durable row after duplicate/restart, restored ledger hash and PITR evidence; recover saved IDs/job IDs and original database state, never repeat deletion blindly. |
+
+Use the [session, evidence and cost operating contract](../docs/operations.md), [stage map](../docs/state.md) and [duplicate/restart evidence contract](../docs/operations.md#duplicate-and-restart-evidence). Times are estimates.
 
 Required after labs 10–15 and 20. Budget for PostgreSQL General Purpose, storage, backup snapshots and restore servers. Run Bash from the repository root on a private Linux management host, with `set -euo pipefail` in each terminal. Use Azure CLI, kubectl, Flux CLI, Git, GitHub CLI, `jq`, `curl` (supporting `--fail-with-body`), `python3`, `openssl`, and `dig`/`getent`. Install PostgreSQL **17 or later client tools** (`psql`, `pg_dump`, `pg_restore`) on that host through your approved package process; `sslrootcert=system` requires a recent libpq. No PostgreSQL password or Azure token belongs in Git or a transcript; do not enable `set -x`. Solutions share a terminal unless stated otherwise. On re-entry, source `use-lab.sh`, reload the JSON outputs (`Out`, `PgOut`), signed-in administrator and database names/host, and recover saved order/hash/backup evidence before continuing.
 
+## Resumable Parts and checkpoints
+
+| Part | Sections | Required checkpoint evidence | Resume/recovery gate |
+|---|---|---|---|
+| Part A — Durable identity and business data | [1](#1-inspect-the-exact-recovery-support-boundary)–[3](#3-bind-identities-and-enable-durable-application-behavior-through-git) | Support inventory, private `PgHost`, SQL grants, reviewed SHA, saved order, post-restart duplicate and one unchanged row. | Reload `Out`, `PgOut`, human admin and saved order; inspect existing SQL mappings rather than rerun initialization or replay conflicting messages blindly. |
+| Part B — Storage and protection | [4](#4-compare-disk-and-files-mechanics)–[5](#5-configure-aks-backup-completely) | Original ledger hash, PVC/PV/zone/attachment map, shared Files read, healthy extension and storage-lab-only protection. | Restore any selector fault/resume `storage`; reload backup instance and vault IDs. Private Files remain outside AKS Backup scope. |
+| Part C — Independent restore proofs | [6](#6-recover-a-destroyed-file-into-a-separate-namespace)–[7](#7-exercise-postgresqls-independent-point-in-time-recovery) | Completed backup/recovery-point/job IDs, matching restored hash, saved PITR UTC and matching restored order, original DB repopulated. | Never repeat deletion on re-entry. Inspect existing jobs/restore servers and verify saved evidence before choosing the next action; original app endpoint remains authoritative. |
+| Part D — Retention and handoff | [8](#8-debrief-and-clean-up-only-disposable-recovery-resources) | Scoped cleanup inventory, retained primary database/backup and lab-23 dead-letter baseline. | Remove only approved disposable restores; preserve retention locks and primary data. A deployment-record deletion is not resource cleanup. |
+
 ## 1. Inspect the exact recovery support boundary
 
-Keep a native Bastion session for Kubernetes/Flux commands on this host. SQL, private DNS checks and TCP-5432 tests use the host's private data-plane connectivity, not Bastion; an API-only workstation cannot initialize or verify the database. Extra Kubernetes terminals share the active temporary `KUBECONFIG` as in README.
+Keep the verified current-shell Bastion session for Kubernetes/Flux commands; reconnect with `source ./scripts/activate-aks-bastion.sh` only if disconnected. SQL, private DNS checks and TCP-5432 tests use the host's private data-plane connectivity, not Bastion; an API-only workstation cannot initialize or verify the database. Extra terminals follow the [shared-session contract](../docs/operations.md#bastion-sessions-and-data-plane-access); changes follow the [reviewed Git contract](../docs/operations.md#reviewed-git-changes).
 
 **Challenge:** Inventory the cluster, CSI drivers, PostgreSQL client and regional SKU support. Decide which state this exercise can protect and which recovery claims it cannot make; retain the inventory and scope decision.
 
@@ -83,6 +105,8 @@ Production zone-redundant HA can reduce interruption from an instance or availab
 
 **Challenge:** Give the API read-only and worker insert/read SQL access through Workload ID, publish the database integration, and prove durability after restart. Test both identical redelivery and conflicting reuse of an ID; retain SQL uniqueness, HTTP and specific dead-letter evidence.
 
+Use the [shared duplicate/restart evidence contract](../docs/operations.md#duplicate-and-restart-evidence), with the **same ID and item** before/after an observed worker restart. Re-run [lab 15 section 8's single-worker experiment](15-scaling.md#8-prove-duplicate-handling-restart-limitations-retry-and-dead-letter-paths) after integration, including its pause cleanup. Here the post-restart result must be `duplicate:true`, `durable:true` and one unchanged SQL row; lab 15 deliberately showed lost process-local state. Keep pod UID/restart and UTC/log evidence, not just the GET result. The conflicting-item test below is separate: it must reject the changed item and preserve the original row.
+
 Use object/principal IDs, not client IDs, for SQL principal mapping. Run initialization once per role pair; inspect existing mappings rather than silently remapping them. Keep the server FQDN, TLS certificate verification and container CA bundle; never add a database password secret. Preserve existing identity/Service Bus configuration and egress allowances in the authoritative lab-13 Git source. Ensure both images implement the shared PostgreSQL app contract.
 
 The rollout restart below is an explicit, recorded operations action, not a replacement for the Git deployment definition. Stop other synthetic producers for the conflicting-ID test, preserve its known dead-letter message, and record the new baseline for lab 23; do not blindly replay it.
@@ -140,7 +164,7 @@ This adds the following values to the production source deployments' `env` lists
 ```bash
 git diff
 git add ./gitops/clusters/primary/apps/orders
-bash ./advanced/publish-reviewed-change.sh --message "Use private passwordless durable order storage"
+bash ./ops/publish-reviewed-change.sh --message "Use private passwordless durable order storage"
 # Use the exact Flux names recorded in lab 20.
 flux reconcile kustomization "$AppKustomization" -n "$FluxNamespace" --with-source
 kubectl rollout status deployment/order-api -n orders --timeout=300s
@@ -237,7 +261,7 @@ The API has SELECT only and the worker INSERT/SELECT. The count result contains 
 
 ## 4. Compare Disk and Files mechanics
 
-**Challenge:** Write and hash a Disk-backed ledger, demonstrate a shared file across Files readers, then induce a scheduling failure and recover without changing the data hash. Explain access modes, topology and reclaim behavior.
+**Challenge:** Write and hash a Disk-backed ledger, demonstrate a shared file across Files readers, and diagnose the actual PVC → PV → topology → attachment chain. Explain access modes, binding and reclaim behavior. The existing selector fault is an optional contrast, not proof of a storage failure.
 
 Platform owns `storage`, its namespace and StorageClass; do not grant those rights to `orders-reconciler`. Persist the owner CR in the primary platform root's explicit resource list using lab 20's export-and-register recipe. Add private `files.yaml` to the storage source through Git, keeping `files-lab` outside backup scope.
 
@@ -250,7 +274,7 @@ Commit and bootstrap a **platform** Kustomization for `advanced/storage`:
 
 ```bash
 git add ./advanced/storage
-bash ./advanced/publish-reviewed-change.sh --message "Add CSI storage recovery exercise"
+bash ./ops/publish-reviewed-change.sh --message "Add CSI storage recovery exercise"
 flux create kustomization storage -n "$FluxNamespace" --source "GitRepository/$GitSource" --path ./advanced/storage --prune --interval 1m
 flux reconcile kustomization storage -n "$FluxNamespace" --with-source
 kubectl rollout status deployment/ledger -n storage-lab --timeout=600s
@@ -278,7 +302,60 @@ kubectl exec -n files-lab "${Readers[1]}" -- cat /data/shared.txt
 
 Expected: both replicas read the same file. `ReadWriteOnce` is a **single-node** access mode, not a single-pod lock; `ReadWriteMany` supports multi-node writers but does not provide application locking. LRS Disk topology can bind to a zone; `WaitForFirstConsumer` avoids premature placement. `Delete` reclaim is deliberately dangerous and cheap for the synthetic exercise. Production may choose `Retain` with an explicit orphan-disk cleanup procedure.
 
-**Controlled break/fix:** suspend `storage`, set an impossible node selector on the disk deployment, and inspect scheduling. The subshell's recovery trap removes only the injected selector key before resuming/reconciling the owner; server-side apply may otherwise preserve an extra live key not owned by Flux:
+**Required storage-specific diagnosis (read-only; analysis can be offline).** Collect the exact ledger claim/volume, StorageClass, pod placement, node zones and attachment state. The saved topology contains infrastructure metadata; protect it as private evidence, not a public issue attachment.
+
+```bash
+mkdir -p .artifacts/advanced/storage-diagnosis
+kubectl get pvc ledger -n storage-lab -o json > .artifacts/advanced/storage-diagnosis/pvc.json
+LedgerPv=$(jq -er '.spec.volumeName | select(length > 0)' .artifacts/advanced/storage-diagnosis/pvc.json)
+kubectl get pv "$LedgerPv" -o json > .artifacts/advanced/storage-diagnosis/pv.json
+kubectl get storageclass lab-disk -o json > .artifacts/advanced/storage-diagnosis/class.json
+kubectl get pods -n storage-lab -l app=ledger -o json > .artifacts/advanced/storage-diagnosis/pods.json
+kubectl get nodes -o json > .artifacts/advanced/storage-diagnosis/nodes.json
+kubectl get volumeattachments.storage.k8s.io -o json |
+  jq --arg pv "$LedgerPv" '{items:[.items[] | select(.spec.source.persistentVolumeName == $pv)]}' \
+  > .artifacts/advanced/storage-diagnosis/attachments.json
+kubectl describe pvc ledger -n storage-lab
+kubectl describe pods -n storage-lab -l app=ledger
+kubectl get events -n storage-lab --sort-by=.lastTimestamp
+```
+
+If the claim is Pending, `jq -er` intentionally stops before a nonexistent PV lookup: retain claim/events/class first, then investigate provisioning and first-consumer scheduling. Do not create a replacement claim to fill the missing evidence.
+
+Analyze the snapshots without cluster access:
+
+```bash
+jq '{phase:.status.phase,class:.spec.storageClassName,access:.spec.accessModes,
+     volume:.spec.volumeName,selectedNode:.metadata.annotations["volume.kubernetes.io/selected-node"]}' \
+  .artifacts/advanced/storage-diagnosis/pvc.json
+jq '{binding:.volumeBindingMode,reclaim:.reclaimPolicy,provisioner,allowedTopologies}' \
+  .artifacts/advanced/storage-diagnosis/class.json
+jq '{claim:.spec.claimRef,driver:.spec.csi.driver,handle:.spec.csi.volumeHandle,
+     affinity:.spec.nodeAffinity,access:.spec.accessModes,reclaim:.spec.persistentVolumeReclaimPolicy}' \
+  .artifacts/advanced/storage-diagnosis/pv.json
+jq '.items[] | {pod:.metadata.name,node:.spec.nodeName,conditions:.status.conditions}' \
+  .artifacts/advanced/storage-diagnosis/pods.json
+jq '.items[] | {node:.metadata.name,zone:.metadata.labels["topology.kubernetes.io/zone"],
+     diskZone:.metadata.labels["topology.disk.csi.azure.com/zone"]}' \
+  .artifacts/advanced/storage-diagnosis/nodes.json
+jq '.items[] | {node:.spec.nodeName,attacher:.spec.attacher,attached:.status.attached,
+     attachError:.status.attachError,detachError:.status.detachError}' \
+  .artifacts/advanced/storage-diagnosis/attachments.json
+```
+
+**Deliverable:** map claim UID/namespace/name to the PV claimRef, driver/handle, actual node and every PV affinity expression; compare with attachment node/status and the original data hash. Do not assume a CSI zone label equals an unrelated node label or that a Bound claim proves a mounted filesystem.
+
+| Storage symptom | Evidence to distinguish | Safe next action |
+|---|---|---|
+| Pending claim with `WaitForFirstConsumer` | No PV yet; selected-node annotation, pod scheduling conditions and class binding mode. | Resolve consumer scheduling/capacity; do not force early binding or invent a disk ID. |
+| `volume node affinity conflict` | PV required topology compared with eligible nodes and actual labels. | Use capacity in the required zone or a supported copy/restore plan; never edit PV affinity to pretend data moved. |
+| `FailedAttachVolume` / multi-attach | PV access mode, VolumeAttachment node/status/errors, old consumer placement and CSI events. | Wait/diagnose managed detach and ownership; never force-detach a disk still used by another writer. |
+| `FailedMount` after attachment | Attached true but pod mount events fail; distinguish filesystem/permissions from Azure attachment. | Inspect the exact CSI/node mount error without deleting the claim or changing reclaim policy. |
+| Healthy binding/attachment | Matching topology, attached node, Ready consumer and unchanged hash. | Record healthy observation; classify the failure rows as offline reasoning, not injected incidents. |
+
+No destructive node, PV/PVC or attachment changes are required. If authorized diagnostic logs are needed, discover `kubectl -n kube-system get pods -o wide` and inspect only the relevant Disk CSI controller/node container and bounded time window; preserve the failing resource ID and error code.
+
+**Optional scheduling contrast:** suspend `storage`, set an impossible node selector on the disk deployment, and inspect scheduling. This is **not** a storage-specific fault. The subshell's recovery trap removes only the injected selector key before resuming/reconciling the owner; server-side apply may otherwise preserve an extra live key not owned by Flux:
 
 ```bash
 (

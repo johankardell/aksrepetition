@@ -155,6 +155,7 @@ class AdvancedHelpersTests(unittest.TestCase):
         for script in (REPO / "advanced").glob("*.sh"):
             shutil.copy2(script, self.root / "advanced" / script.name)
         shutil.copy2(REPO / "scripts/lib.sh", self.root / "scripts/lib.sh")
+        shutil.copy2(REPO / "ops/publish-reviewed-change.sh", self.root / "ops/publish-reviewed-change.sh")
         shutil.copytree(REPO / "k8s/base", self.root / "k8s/base")
         (self.root / "scripts/use-lab.sh").write_text('''#!/usr/bin/env bash
 Root=$MOCK_ROOT

@@ -2,13 +2,26 @@
 
 **Level:** advanced.
 
-**Customer:** regular lifecycle work without promising zero disruption. **Time:** 3–5 hours with a supported target available. **Result:** a real blocked drain and repair, a supported Kubernetes upgrade, a node-image update, and measured traffic/transaction evidence.
+**Customer:** regular lifecycle work without promising zero disruption. **Result:** a real blocked drain and repair, a supported Kubernetes upgrade, a node-image update, and measured traffic/transaction evidence.
+
+## Lab contract
+
+| Field | This lab |
+|---|---|
+| Entry | Labs 10–15 and 20–21; successful restore evidence, supported target, surge quota and approved window. |
+| Host and identity | Private management/consumer host; sourced Bastion with scoped platform/node operator, never admin kubeconfig. |
+| Time | Estimate: 90–150 minutes active plus 1–3 hours upgrade/image/soak waits; no advertised target means deferred execution. |
+| Cost | Bounded per-pool surge nodes, traffic/logs and retained recovery resources; a no-op is not a measured replacement. |
+| Changes | Platform owns lifecycle settings and version/PSA intent; incident owner restores the exact cordoned node; app owner assesses schema compatibility. |
+| Exit and re-entry | Actual versions/images and business SLIs, no residual cordon; retry only supported failed operations after diagnosis, never downgrade or replay foundation. |
+
+Use the [session, evidence and cost operating contract](../docs/operations.md), [stage map](../docs/state.md) and [tooling/support baseline](../docs/operations.md#tooling-and-support). Times are estimates.
 
 Prerequisites: labs 10–15 and 20–21, last successful backup and PostgreSQL restore test, spare vCPU/subnet quota for surge, and an approved change window. A customer SLO is not an AKS control-plane SLA. Run Bash from the repository root on the private Linux management host with Azure CLI, kubectl, Flux CLI, Git, GitHub CLI, `jq`, and the Linux HTTP/database tools from lab 21. Start each terminal with `set -euo pipefail`; session variables do not transfer between terminals. Use Contributor on AKS plus scoped node administration, not admin kubeconfig.
 
 ## 1. Build a specific go/no-go record
 
-Run Kubernetes/Flux operations in the active native Bastion subshell. Terminal B retains that tunnel; terminal A needs private application HTTPS connectivity and shares the temporary `KUBECONFIG` only if it also runs Kubernetes diagnostics. A closed tunnel requires a fresh session, not fetching credentials over its loopback kubeconfig.
+Run Kubernetes/Flux operations in the verified current-shell Bastion session; reconnect with `source ./scripts/activate-aks-bastion.sh` only if disconnected. Terminal B retains that tunnel; terminal A needs private application HTTPS connectivity and shares the temporary `KUBECONFIG` only if it also runs Kubernetes diagnostics. Never fetch credentials over its loopback kubeconfig.
 
 **Task:** choose a currently advertised GA upgrade target and document compatibility, capacity, recovery readiness and blockers before authorizing the change. If no supported target exists, defer the version-upgrade portion; do not manufacture one by downgrading or selecting an unsupported release.
 
@@ -257,27 +270,54 @@ Persist the chosen `KubernetesVersion` in local deployment settings without comm
 
 </details>
 
-## 6. Practice application rollback; choose cluster recovery honestly
+## 6. Gate rollback on schema compatibility; choose cluster recovery honestly
 
-**Task:** roll back a reviewed, schema-compatible application-only release through Git and re-promote the known-good release for lab 23. Explain a replacement-cluster recovery path without a Kubernetes downgrade or two active database writers. If no safe release exists, complete lab 13's rollback exercise first.
+**Task:** produce a schema-compatibility decision for the current and candidate application digests against lab 21's durable database, then test a rollback **only if safe and approved**. Generic release recovery is already taught in [lab 13 section 7](13-gitops.md#7-prove-drift-correction-then-introduce-and-recover-a-bad-release); do not repeat a bad-image drill here. Explain replacement-cluster recovery without Kubernetes downgrade or two active database writers.
+
+The supplied app has `processed_orders(order_id, item, processed_at)` with a primary key and distinct SELECT versus INSERT/SELECT grants. No schema migration is introduced in this lab. Deliver a compatibility matrix with **current app / candidate app × current schema / proposed expanded schema**, marking untested cells rather than assuming compatibility. Use code/release tests and read-only SQL metadata, not destructive DDL on the cumulative database.
+
+| Gate | Required evidence and decision |
+|---|---|
+| Reader/writer compatibility | Both versions use existing columns/defaults, preserve identity/TLS/grants and reject conflicting ID reuse. A binary that omits durable writes is not a safe rollback. |
+| Expand before contract | Add compatible nullable/defaulted structures first; backfill separately with bounds. Delay drop/rename/type tightening until old readers/writers and rollback retention are retired. This is a design review, not permission to run DDL. |
+| Data semantics | Re-run lab 21's accepted-ID lookup, identical redelivery/restart uniqueness and conflicting-item evidence. Schema compatibility alone cannot prove business semantics. |
+| Recovery decision | Name rollback digest, schema assumptions, change owner and abort criteria. If the old app cannot use current data, choose a reviewed forward fix or separately authorized restore/cutover, not an automatic code revert or data rollback. |
 
 <details>
 <summary>Solution</summary>
 
-In the lab-13 Git repository, revert the known **application** release commit from that lab, not the database migration or platform upgrade:
+With lab 21's private `PGHOST`, administrator `PGUSER`, `PGDATABASE`, `PGSSLMODE=verify-full` and `PGSSLROOTCERT=system` restored, inspect the actual schema without changing it:
+
+```bash
+(
+  set -euo pipefail
+  : "${PGHOST:?Restore the authoritative private database host}"
+  : "${PGUSER:?Restore the approved Entra SQL administrator login}"
+  [[ "${PGDATABASE:-}" == ordersdb ]]
+  [[ "${PGSSLMODE:-}" == verify-full && "${PGSSLROOTCERT:-}" == system ]]
+  trap 'unset PGPASSWORD' EXIT
+  PGPASSWORD=$(az account get-access-token --resource https://ossrdbms-aad.database.windows.net --query accessToken -o tsv)
+  export PGPASSWORD
+  psql -X --set ON_ERROR_STOP=1 -c "SELECT column_name,data_type,is_nullable,column_default FROM information_schema.columns WHERE table_schema='public' AND table_name='processed_orders' ORDER BY ordinal_position;"
+  psql -X --set ON_ERROR_STOP=1 -c "SELECT constraint_name,constraint_type FROM information_schema.table_constraints WHERE table_schema='public' AND table_name='processed_orders';"
+)
+```
+
+Only with an approved matrix, use the [reviewed-change contract](../docs/operations.md#reviewed-git-changes) for the known **application-only** release. Inspect its complete diff and require it changes only the intended image references; do not revert the lab-21 integration, database migration or platform upgrade. If no compatible previous release exists, record **rollback not executed** with the incompatibility and forward-recovery plan.
 
 ```bash
 git log --oneline -12
 read -r -p 'Reviewed application-only release commit to revert: ' AppReleaseCommit
 [[ "$AppReleaseCommit" =~ ^[[:xdigit:]]{7,40}$ ]] || { printf '%s\n' 'Expected a reviewed commit SHA.' >&2; exit 1; }
 git --no-pager show --stat "$AppReleaseCommit"
+git --no-pager show "$AppReleaseCommit" -- ./gitops/clusters/primary/apps/orders
 git revert --no-commit "$AppReleaseCommit"
-bash ./advanced/publish-reviewed-change.sh --message "Revert the reviewed application-only release"
+bash ./ops/publish-reviewed-change.sh --message "Revert the reviewed application-only release"
 flux reconcile kustomization "$AppKustomization" -n "$FluxNamespace" --with-source
 kubectl rollout status deployment/order-api -n orders --timeout=600s
 ```
 
-Check schema backward compatibility before reverting code. If there is no safe app-only release to revert, use the lab-13 tested release rollback exercise first; **do not** revert the lab-21 integration arbitrarily. Verify an accepted order after rollback, then re-promote the approved known-good release through Git for lab 23.
+For a merge commit or mixed-scope commit, stop and instead use lab 13's reviewed digest-promotion helper with the compatible previous digest; do not guess a merge parent. After an executed rollback, verify a fresh accepted order's GET/SQL row and lab 21's duplicate/conflict checks, then re-promote the approved known-good release through Git for lab 23. Keep SQL grants and PostgreSQL configuration intact throughout.
 
 AKS Kubernetes downgrade is not supported. If cluster repair is unsuitable, use **blue/green cluster replacement**: provision a supported cluster and networking, configure identities and private DNS, restore required CSI data into a supported target, reconcile Git at a verified compatible SHA, run read/write checks while traffic is fenced, then change routing. Managed PostgreSQL/Service Bus remain external; do not clone them into two writers accidentally. Retain the old cluster until rollback criteria expire, but do not keep an unsupported cluster as the normal escape route.
 
@@ -285,7 +325,7 @@ AKS Kubernetes downgrade is not supported. If cluster repair is unsuitable, use 
 
 ## 7. Customer debrief and cleanup
 
-Deliver: before/after versions and image IDs, target eligibility, compatibility/no-go checklist, blocked and successful eviction outputs, ARM operation result, observed traffic/transaction SLI, application rollback SHA, replacement-cluster decision, and remaining unsupported/partial items.
+Deliver: before/after versions and image IDs, target eligibility, compatibility/no-go checklist, blocked and successful eviction outputs, ARM operation result, observed traffic/transaction SLI, schema compatibility matrix, application rollback SHA **or justified not-executed decision**, replacement-cluster decision, and remaining unsupported/partial items.
 
 **Task:** answer the customer questions, reconcile the evidence with the agreed objective, and remove incident state without undoing supported upgrades or enabling a competing upgrade owner.
 
@@ -317,7 +357,7 @@ Evaluate Premium tier/LTS support and application compatibility against your mai
 
 </details>
 
-Remove the incident namespace if any step stopped early and uncordon only the node recorded in `$Node`. Keep upgraded versions, PostgreSQL, backup, application and telemetry for lab 23. Restore the previous auto-upgrade channel **only when it has a single agreed owner**; lab 23 uses Fleet and must not compete with autonomous updates. Remove no pools, PVCs, identities or regional resources in this lab.
+Remove the incident namespace if any step stopped early and uncordon only the node recorded in `$Node`. Keep upgraded versions, PostgreSQL, backup, application and telemetry for lab 23. Restore the previous auto-upgrade channel **only when it has a single agreed owner**; lab 23's optional Fleet side exercise must not compete with autonomous updates. Remove no pools, PVCs, identities or regional resources in this lab.
 
 <details>
 <summary>Solution: close the change and remove incident state</summary>
@@ -340,6 +380,8 @@ Only use `$Node` retained from this exercise; if it was lost, identify the incid
 </details>
 
 ## Official references and status
+
+Optional after this lab: the [infrastructure lifecycle workshop](../workshops/infrastructure-lifecycle.md) examines desired-state drift and migration planning read-only/offline. It does not authorize replaying bootstrap or changing the cumulative upgrade owner.
 
 Checked **2026-09-10**: [upgrade AKS](https://learn.microsoft.com/azure/aks/upgrade-cluster), [planned maintenance](https://learn.microsoft.com/azure/aks/planned-maintenance), [node-image upgrade](https://learn.microsoft.com/azure/aks/node-image-upgrade), [upgrade options](https://learn.microsoft.com/azure/aks/upgrade-aks-cluster), [supported versions](https://learn.microsoft.com/azure/aks/supported-kubernetes-versions). Required commands use GA update/drain features; no preview force-upgrade, preview drain bypass or Kubernetes downgrade is part of the recovery plan.
 

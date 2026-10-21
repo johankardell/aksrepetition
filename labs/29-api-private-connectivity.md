@@ -4,6 +4,19 @@
 
 **Outcome:** authenticated public access before cutover, authenticated private access before and after cutover, loss of the old public network path, and authenticated access from an unpeered VNet through Private Link with correct DNS and verified TLS.
 
+## Lab contract
+
+| Field | This lab |
+|---|---|
+| Entry | Optional disposable VNet-integrated cluster; neither cumulative deployment nor lab 28 is a prerequisite. |
+| Host and identity | Fresh direct-egress workstation; Entra operator and separate read-only VM probe identities via scoped Run Command. |
+| Time | Estimate: 90–150 minutes active plus 30–90 minutes cluster/VM/private-endpoint waits. |
+| Cost | Two nodes, two VMs/disks, Standard AKS, two NAT/public IPs, consumer PE/DNS and traffic; no Bastion required. |
+| Changes | Operator owns isolated public-to-private API cutover and unpeered consumer path; cumulative API remains untouched. |
+| Exit and re-entry | Authenticated before/after paths, old public-path loss and verified TLS; reload exact tagged context and current cutover stage, never reverse exposure to retry. |
+
+Use the [session, evidence and cost operating contract](../docs/operations.md), [stage map](../docs/state.md) and [tooling/support baseline](../docs/operations.md#tooling-and-support). Times are estimates.
+
 ## Prerequisites, cost, and safety boundary
 
 **Use a new disposable cluster, resource group and two isolated VNets.** Do not source `use-lab.sh`, reuse cumulative settings, redeploy foundation, change the cumulative API, or connect these networks to corporate/shared networks. Labs 10 and 12 provide useful background but their deployments are not prerequisites. Lab 28 is not a prerequisite either; do not reuse its deliberately overlapping network.

@@ -3,6 +3,9 @@ set -euo pipefail
 source "$(dirname -- "$0")/use-lab.sh"
 (($# == 0)) || die 'render-manifests.sh takes no arguments.'
 destination=$Root/rendered/base
+[[ ! -e $destination ]] || die 'Existing rendered/base: inspect and resume the recorded lab stage; never overwrite accumulated state.'
+[[ ! -f $Root/gitops/clusters/primary/apps/orders/kustomization.yaml ]] ||
+    die 'GitOps already owns the application. Edit its sources; do not render a new base.'
 mkdir -p "$destination"
 replacements=$(jq -n --arg registry "$(lab_value RegistryServer)" --arg tag "$(lab_value ImageTag)" \
     --arg bus "$(lab_value ServiceBusName).servicebus.windows.net" \

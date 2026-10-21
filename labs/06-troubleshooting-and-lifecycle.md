@@ -4,6 +4,19 @@
 
 **Outcome:** a verified scheduling recovery, a basic lifecycle/cost runbook and a safe handoff to the intermediate track without redeployment.
 
+## Lab contract
+
+| Field | This lab |
+|---|---|
+| Entry | Lab 5 healthy initial workload; before identity/network/GitOps progression. |
+| Host and identity | Private build VM; operator current-shell Bastion session and management-local probes. |
+| Time | Estimate: 60–90 minutes active plus 5–20 minutes bounded fault/rollout waits. |
+| Cost | No new services/nodes; foundation continues billing during pauses. |
+| Changes | Incident operator temporarily changes only API scheduling; restores selector and verifies handoff. |
+| Exit and re-entry | Six Ready nodes, original replicas and repaired probes; after interruption repair the exact selector before collecting exit evidence. |
+
+Use the [session, evidence and cost operating contract](../docs/operations.md) and [stage map](../docs/state.md). Times are planning estimates, not measured results.
+
 ## Prerequisites and resource boundary
 
 Complete [lab 5](05-acr-and-workloads.md) with healthy API/worker rollouts. Run Bash at the repository root on the private build VM, in the active TLS-verified Bastion session. Use only the dedicated lab environment and synthetic workload.
@@ -196,9 +209,9 @@ No. Disconnecting stops a local session, not Azure resources. AKS stop/start has
 
 If any fault remains, repair it before pausing. Stop attached port-forwards with Ctrl+C and run `disconnect_aks_bastion` in the owner shell. Retain only the intended local artifacts. Reconnect using lab 3 and verify context on return.
 
-To pause build-VM compute, close sessions first, then use the [README deallocation/start recipe](../README.md#pausing-resuming-and-final-cleanup) from the original workstation. Guest shutdown is not Azure deallocation; managed disks, Firewall and Bastion still bill. Do not stop/resize the AKS pools as part of this lab.
+To pause build-VM compute, close sessions first, then use the [deallocation/start recipe](../docs/operations.md#pausing-resuming-and-final-cleanup) from the original workstation. Guest shutdown is not Azure deallocation; managed disks, Firewall and Bastion still bill. Do not stop/resize the AKS pools as part of this lab.
 
-If permanently leaving after beginners, follow [beginner-only teardown](../README.md#beginner-only-teardown). Do not run Fleet, backup or database commands for resources not introduced yet, and do not delete anything if continuing to intermediate labs.
+If permanently leaving after beginners, follow [beginner-only teardown](../docs/operations.md#beginner-only-teardown). Do not run Fleet, backup or database commands for resources not introduced yet, and do not delete anything if continuing to intermediate labs.
 
 ## References
 

@@ -2,13 +2,36 @@
 
 **Level:** advanced.
 
-**Customer:** a regional failure must not become an unbounded data-integrity incident. **Time:** one or two days, including replication/provisioning. **Cost:** two AKS platforms/firewalls/Bastion Standard hosts, replicated Service Bus Premium, two PostgreSQL servers, Front Door Premium and WAF, ACR replication, private endpoints and traffic. Obtain an explicit budget/change approval before execution.
+**Customer:** a regional failure must not become an unbounded data-integrity incident. Obtain an explicit budget/change approval before execution.
+
+## Lab contract
+
+| Field | This lab |
+|---|---|
+| Entry | Labs 10–15 and 20–22, restored authoritative primary and signed recovery contract; Fleet is optional, not a DR prerequisite. |
+| Host and identity | Independently reachable regional data hosts; two explicit foreground Bastion owner sessions for dual contexts; named incident/data/platform authorities. |
+| Time | Estimate: 6–10 hours active plus 4–12 hours provisioning/replication waits across one or two days; approval/CA issuance may extend this. |
+| Cost | Second six-node platform/Firewall/Bastion/build VM, ACR/message replication, PostgreSQL replica, Front Door Premium/WAF, endpoints and traffic. |
+| Changes | Platform Git owns fences/overlays; incident commander authorizes handover; messaging/database owners promote one authoritative writer. |
+| Exit and re-entry | Accepted-ID/item ledger, measured RTO/RPO and failback authority; reload both contexts and saved fences before any promotion. Choose optional lab 24 before teardown or final teardown. |
+
+Use the [session, evidence and cost operating contract](../docs/operations.md) and [stage map](../docs/state.md). Times are planning estimates, not measured results.
 
 This capstone depends on labs 10–15 and 20–22. All commands run from the workspace root in Linux Bash with `jq`, `curl`, `getent`, and `psql`. Use a VNet-connected management host **in each region** or approved independently resilient private connectivity/DNS. Do not use a primary-region VM as the only recovery control point. No public AKS API, admin credentials, public database, or connection strings are introduced.
 
-Start in a **fresh primary native Bastion subshell** from lab 10. Task 2 adds an independently owned secondary Bastion and a second foreground tunnel on the same operator host, with separate ports/contexts; the original terminal merges their temporary kubeconfig paths. Both tunnel-owner terminals must remain alive for commands using both `--context` values. The primary/secondary data-plane hosts still provide regional SQL/private-endpoint checks; Bastion tunnels only each Kubernetes API. An alternate recovery workstation can establish its own secondary tunnel without the primary-region host.
+**Dual-region exception to the normal sourced session:** start in a fresh terminal with `bash ./scripts/connect-aks-bastion.sh` for the primary foreground tunnel/subshell. Task 2 adds an independently owned secondary Bastion and a second foreground tunnel on the same operator host, with separate ports/contexts; the original terminal merges their temporary kubeconfig paths. Both tunnel-owner terminals must remain alive for commands using both `--context` values. The primary/secondary data-plane hosts still provide regional SQL/private-endpoint checks; Bastion tunnels only each Kubernetes API. An alternate recovery workstation can establish its own secondary tunnel without the primary-region host. Do not source the single-session activation helper over this merged dual-context configuration.
 
 The Bash helpers use lowercase kebab-case filenames ending in `.sh` and accept `--kebab-case` options (for example `--registry-name`, `--host-name`, and `--base-uri`). Run helpers as `bash ./...sh`; executable permission bits are not required. `source ./scripts/use-lab.sh` supplies JSON strings `Lab` and `Outputs`, absolute repository path `Root`, and the strict `jq -er` accessors `lab_value KEY` and `output_value KEY`. Keep these shells open between tasks; on a second regional host, source the same primary settings and load the reviewed regional inventory/evidence separately. Do not enable shell tracing or record transcripts while handling tokens or private keys.
+
+## Resumable Parts and checkpoints
+
+| Part | Sections | Required checkpoint evidence | Resume/recovery gate |
+|---|---|---|---|
+| Part A — Independent secondary platform | [1](#1-sign-the-recovery-contract-before-provisioning)–[3](#3-make-images-identities-and-secrets-survive-primary-loss) | Signed authority/targets, secondary outputs/address plan, independent management, both TLS/context checks and image/identity inventory. | Reload saved regional outputs and recreate both foreground sessions; never overwrite primary settings or redeploy a progressed foundation. |
+| Part B — Passive recovery service | [4](#4-establish-actual-message-and-database-replication)–[6](#6-publish-only-private-tls-validated-regional-origins) | Message/SQL replication state, passive Git SHA/zero writers, valid origin certificates, private-link approval and edge/WAF evidence. | Verify actual primary locations, lag and fences; recover failed setup without admitting a secondary writer. |
+| Part C — Optional independent Fleet lifecycle | [7](#7-execute-a-supported-staged-fleet-update-independently-of-dr) | Only if chosen: member before/after image IDs, run status and no-op/actual replacement classification. | Requires prepared secondary platform; stop/finish all maintenance before DR. **Skip directly to section 8 without Fleet.** |
+| Part D — Regional handover | [8](#8-create-pending-business-work-fence-primary-and-declare-the-incident)–[9](#9-promote-data-and-messages-then-admit-secondary-application-traffic) | Saved accepted IDs/items, declaration UTC, live and Git fencing SHA, authorized promotions and measured recovery report. | Keep producers stopped; load existing ledgers/fences, determine actual promoted authorities before any command. Never repeat a promotion or remove a fence from memory. |
+| Part E — Failback and explicit exit choice | [10](#10-fail-back-with-a-new-replica-not-by-pointing-at-stale-data)–[11](#11-deliver-the-customer-decision-and-safely-decommission) | New authoritative database, reverse fence/activation SHA, verified IDs and restored primary; retained-vs-teardown decision. | Do not delete a region still hosting active data. Choose lab 24 **before** final teardown, or tear down and skip it. |
 
 ## 1. Sign the recovery contract before provisioning
 
@@ -34,7 +57,7 @@ Keep extra regional values separate: do not overwrite primary `local.settings.js
 | HTTP routing | Front Door Premium health probes + operator enable gate | Health probes do not promote data or fence writers |
 | TLS/config/secrets | Regional Key Vault and independently issued origin TLS | Key Vault recovery is not arbitrary instant cross-region cloning |
 | CSI exercise data | Lab-21 backup boundary | Local operational snapshots/private Files are not region DR |
-| Cluster updates | Fleet staged update runs | **Fleet does not perform application/data disaster recovery** |
+| Cluster updates (optional lifecycle side exercise) | Fleet staged update runs | **Fleet does not perform application/data disaster recovery and is not a DR prerequisite** |
 
 Record all extra values separately; do not overwrite `local.settings.json` for the primary:
 
@@ -115,7 +138,7 @@ az deployment group create -g "$SecondaryRg" -n private-endpoints -f ./infra/pri
   "keyVaultId=$(jq -er '.keyVaultId.value' <<< "$Secondary")" "serviceBusId=$(jq -er '.serviceBusId.value' <<< "$Secondary")"
 ```
 
-Secondary foundation includes its private build VM, firewall and management-subnet route/peering. Use that regional VM through its own Bastion for the secondary SQL/DNS checks, following README's checkout/authentication recipe; VM ID/user are in `$Secondary`. Keep a recovery workstation copy of the SSH key so primary-host loss cannot block access. The two API tunnels can still share one operator host as below. Repeat only the **node route-table association and AKS outbound-type transition** from lab 12 with secondary outputs, not the primary VNet:
+Secondary foundation includes its private build VM, firewall and management-subnet route/peering. Use that regional VM through its own Bastion for the secondary SQL/DNS checks, following the [checkout/authentication recipe](../docs/operations.md#private-build-vm); VM ID/user are in `$Secondary`. Keep a recovery workstation copy of the SSH key so primary-host loss cannot block access. The two API tunnels can still share one operator host as below. Repeat only the **node route-table association and AKS outbound-type transition** from lab 12 with secondary outputs, not the primary VNet:
 
 ```bash
 SecondaryEgress=$(az deployment group show -g "$SecondaryRg" -n egress --query properties.outputs -o json)
@@ -329,7 +352,7 @@ This is a **warm platform/cold application** lab, not active/active. Both applic
 
 **Scaler identity boundary:** lab 15's primary KEDA operator uses the separate `$(lab_value Prefix)-scaler` UAI from deployment `scaling-identity`, not the foundation worker identity. Preserve that scaler client ID, operator federation and `TriggerAuthentication/servicebus-workload` throughout primary fencing/failback; the fencing patch changes none of them. The secondary helper copies `k8s/base`, **not** the primary GitOps application directory containing scaling assets, and rejects rendered HPA/KEDA authentication resources or `__SCALER_CLIENT_ID__`. Consequently this required fixed-replica secondary has no KEDA operator configuration or scaler client ID to substitute, and creates no secondary scaler. Its worker retains receiver-only Service Bus permission. Adding secondary autoscaling would be a separate change requiring an independently provisioned scaler identity, secondary-issuer operator federation and correct shared-queue scope; never reuse the primary scaler or substitute the worker client ID.
 
-Use the **existing lab-13 repository**, a new secondary cluster path and a new scoped read-only runtime credential. Verify owner/name/access before bootstrap, which can otherwise create a misspelled repository. Use the actual default branch/personal-account flag as appropriate. Mirror the same Flux controller version through the authorized private runner; no direct `ghcr.io` pulls. Any temporary bootstrap branch-policy exception must be narrowly approved and removed. Revoke the replaced bootstrap PAT, rotate runtime credentials, and keep normal changes on `publish-reviewed-change.sh`.
+Use the **existing lab-13 repository**, a new secondary cluster path and a new scoped read-only runtime credential. Verify owner/name/access before bootstrap, which can otherwise create a misspelled repository. Use the actual default branch/personal-account flag as appropriate. Mirror the same Flux controller version through the authorized private runner; no direct `ghcr.io` pulls. Any temporary bootstrap branch-policy exception must be narrowly approved and removed. Revoke the replaced bootstrap PAT, rotate runtime credentials, and use `ops/publish-reviewed-change.sh` under the [reviewed-change contract](../docs/operations.md#reviewed-git-changes).
 
 Namespace/RBAC creation remains platform-owned. Persist the app CR and secondary RBAC in the **secondary** bootstrap root's explicit resource list, never the primary scope.
 
@@ -383,7 +406,7 @@ if [[ "$OwnerType" == User ]]; then PersonalArgs=(--personal); fi
 kubectl --context "$SecondaryContext" apply -f ./advanced/secondary-rbac.yaml
 git pull --ff-only
 git add ./advanced/regions
-bash ./advanced/publish-reviewed-change.sh --message "Prepare fenced secondary orders recovery"
+bash ./ops/publish-reviewed-change.sh --message "Prepare fenced secondary orders recovery"
 flux create kustomization orders-secondary --context "$SecondaryContext" -n flux-system \
   --source GitRepository/flux-system --path ./advanced/regions/secondary --prune --interval 1m --service-account orders-reconciler
 flux reconcile kustomization orders-secondary --context "$SecondaryContext" -n flux-system --with-source
@@ -471,7 +494,7 @@ YAML
   kubectl kustomize "./advanced/origins/$Region" > /dev/null
 done
 git add ./advanced/origins
-bash ./advanced/publish-reviewed-change.sh --message "Add private TLS origins for Front Door"
+bash ./ops/publish-reviewed-change.sh --message "Add private TLS origins for Front Door"
 flux create kustomization origin-primary --context "$PrimaryContext" -n "$FluxNamespace" --source "GitRepository/$GitSource" --path ./advanced/origins/primary --prune --interval 1m
 flux create kustomization origin-secondary --context "$SecondaryContext" -n flux-system --source GitRepository/flux-system --path ./advanced/origins/secondary --prune --interval 1m
 kubectl --context "$PrimaryContext" get service regional-origin -n orders
@@ -550,6 +573,8 @@ When every origin is unhealthy, Front Door may route rather than become an absol
 
 ## 7. Execute a supported staged Fleet update independently of DR
 
+**Optional independent lifecycle side exercise.** Enter only after the secondary platform is prepared and both clusters' add-ons, access and health have been verified. Its placement here is a pause point, not a DR dependency: skip this entire section and continue to [section 8](#8-create-pending-business-work-fence-primary-and-declare-the-incident). Record **not executed** when skipped; never create Fleet just to satisfy a recovery checklist.
+
 **Challenge:** Run a supported staged update, observe the secondary-first sequence and soak, and retain each member's before/after image IDs and outcome. Distinguish an actual replacement from a no-op and demonstrate the stop decision for a failed validation.
 
 **Safety gates:** Do not overlap this task with the regional failover exercise. Agree member maintenance windows and one upgrade owner; a timer is not human approval. Use supported GA stages, not preview failure tolerances, and stop on failed health/business checks.
@@ -572,7 +597,7 @@ az fleet updaterun start -g "$(lab_value ResourceGroup)" --fleet-name "$Fleet" -
 az fleet updaterun show -g "$(lab_value ResourceGroup)" --fleet-name "$Fleet" -n "$Run" -o json
 ```
 
-Use CLI ≥2.82 and fleet extension ≥1.8.3 per current quickstart. No hub is needed for update orchestration. The JSON uses GA stages/groups and a 600-second soak, **not preview maxAllowedFailures or approval features**. A timer is not a human approval gate.
+Use the reviewed Azure CLI **2.90+** baseline. The Fleet quickstart's CLI ≥2.82 and fleet extension ≥1.8.3 are service minimums, not a replacement for [current tooling/support review](../docs/operations.md#tooling-and-support). No hub is needed for update orchestration. The JSON uses GA stages/groups and a 600-second soak, **not preview maxAllowedFailures or approval features**. A timer is not a human approval gate.
 
 Fleet respects member maintenance windows. Arrange overlapping approved windows and no competing cluster automatic upgrades before starting. While secondary stage executes, verify node versions, add-on health and image pull; during soak verify primary orders and stop the run on failure:
 
@@ -657,7 +682,7 @@ Fencing must be durable before data promotion: update the **primary Git desired 
 ```bash
 bash ./ops/add-gitops-file.sh --source ./advanced/primary-fence.yaml --kind Patch --namespace orders
 git add ./gitops/clusters/primary/apps/orders
-bash ./advanced/publish-reviewed-change.sh --message "Fence primary app and KEDA before regional promotion"
+bash ./ops/publish-reviewed-change.sh --message "Fence primary app and KEDA before regional promotion"
 git rev-parse HEAD | tee ./.artifacts/advanced/primary-fencing-sha.txt
 ```
 
@@ -705,7 +730,7 @@ Edit only `advanced/regions/secondary/kustomization.yaml` replica counts: API 2 
 bash ./advanced/set-regional-replicas.sh --api 2 --worker 1
 kubectl kustomize ./advanced/regions/secondary | grep 'replicas:'
 git add ./advanced/regions/secondary
-bash ./advanced/publish-reviewed-change.sh --message "Activate secondary after planned data and message promotion"
+bash ./ops/publish-reviewed-change.sh --message "Activate secondary after planned data and message promotion"
 flux reconcile kustomization orders-secondary --context "$SecondaryContext" -n flux-system --with-source
 kubectl --context "$SecondaryContext" rollout status deployment/order-api -n orders --timeout=600s
 kubectl --context "$SecondaryContext" rollout status deployment/order-worker -n orders --timeout=600s
@@ -819,7 +844,7 @@ az afd origin update -g "$(lab_value ResourceGroup)" --profile-name "$FrontDoor"
 az servicebus queue show -g "$(lab_value ResourceGroup)" --namespace-name "$(lab_value ServiceBusName)" -n orders --query countDetails
 bash ./advanced/set-regional-replicas.sh --api 0 --worker 0
 git add ./advanced/regions/secondary
-bash ./advanced/publish-reviewed-change.sh --message "Fence secondary for planned failback"
+bash ./ops/publish-reviewed-change.sh --message "Fence secondary for planned failback"
 flux reconcile kustomization orders-secondary --context "$SecondaryContext" -n flux-system --with-source
 kubectl --context "$SecondaryContext" get deployment,pods -n orders
 # Continue only when no secondary API/worker pods remain:
@@ -838,7 +863,7 @@ ReturnIp=$(awk 'NR == 1 {print $1}' <<< "$ReturnAddresses")
 bash ./advanced/set-primary-database.sh --host-name "$(jq -er '.fullyQualifiedDomainName' <<< "$ReturnServer")" --private-ip "$ReturnIp"
 bash ./ops/remove-gitops-file.sh --name primary-fence.yaml --namespace orders
 git add ./gitops/clusters/primary/apps/orders
-bash ./advanced/publish-reviewed-change.sh --message "Return primary to the recovered database and remove writer fence"
+bash ./ops/publish-reviewed-change.sh --message "Return primary to the recovered database and remove writer fence"
 kubectl --context "$PrimaryContext" annotate scaledobject --all -n orders autoscaling.keda.sh/paused-replicas-
 mapfile -t IncidentOwners < ./.artifacts/advanced/incident-owners.txt
 for Owner in "${IncidentOwners[@]}"; do
@@ -878,7 +903,14 @@ For reprotection, repeat task 4's supported replica-create/private-endpoint/Entr
 
 ## 11. Deliver the customer decision and safely decommission
 
-Deliver a UTC timeline, infrastructure/output IDs, Git SHAs, certificate validation/private-origin evidence, WAF block evidence, Fleet member outcomes, both promotions, all accepted IDs/items, duplicate test, replication lag observations, measured RTO/RPO, failback result and new authoritative database name.
+Deliver a UTC timeline, infrastructure/output IDs, Git SHAs, certificate validation/private-origin evidence, WAF block evidence, Fleet member outcomes **or not executed**, both promotions, all accepted IDs/items, duplicate test, replication lag observations, measured RTO/RPO, failback result and new authoritative database name.
+
+### Choose the next step before teardown
+
+| Choice | Required action |
+|---|---|
+| Optional lab 24 next | Complete failback and retain the healthy primary, GitOps, private network/trust and management access. Go to [lab 24](24-kaito.md) **before** end-of-pack teardown; its GPU cleanup precedes returning here. Retained resources continue billing. |
+| Finish the cumulative track now | Preserve evidence, confirm data authority/retention, and perform final teardown below. **Skip lab 24 after teardown**; do not replay foundation over partial leftovers to satisfy its prerequisites. Independent labs 25–29 have their own entry contracts. |
 
 **Challenge:** Present a go/no-go recovery decision supported by the measured timeline and ledger, answer the customer questions, then retire only the approved disposable footprint in dependency order.
 
@@ -894,7 +926,7 @@ If you ran [Lab 24: KAITO inference](24-kaito.md), complete its Workspace and GP
 At end-of-pack teardown:
 
 1. Confirm successful failback or obtain explicit approval to delete all synthetic business data. Stop producers; disable both Front Door origins.
-2. Stop active Fleet runs; remove member registrations (`az fleet member delete -g "$(lab_value ResourceGroup)" --fleet-name "$Fleet" -n secondary --yes`, likewise primary), then delete the Fleet resource.
+2. **If optional section 7 was executed**, stop active Fleet runs; remove member registrations (`az fleet member delete -g "$(lab_value ResourceGroup)" --fleet-name "$Fleet" -n secondary --yes`, likewise primary), then delete the Fleet resource. If skipped, no Fleet cleanup is required.
 3. Remove regional app/origin Kustomizations through their Git bootstrap sources and prune **before** deleting clusters so AKS cleans up PLS/load balancers. Delete Front Door/security policy/WAF after traffic is intentionally retired; revoke private endpoint connections.
 4. Remove Service Bus secondary replication location only after zero backlog and verified promotion state; use `namespace update --locations` with a reviewed single Primary entry. This deletes the removed region's replica data. If finishing everything, delete the namespace only as part of final foundation teardown.
 5. Keep active `$PgReturn` and any required replica/backup until retention expires. Delete stale `$Pg` / promoted `$PgReplica` only after checking no workload endpoint references them. Remove their PEs, not shared private DNS zone links still serving other databases.
@@ -944,4 +976,4 @@ Checked **2026-09-10**: [Service Bus Geo-Replication](https://learn.microsoft.co
 
 ---
 
-**Next lab (optional):** [Lab 24 - KAITO inference](24-kaito.md). Requires the retained primary environment; complete it before final teardown.
+**Next lab (optional):** [Lab 24 - KAITO inference](24-kaito.md). Requires the retained primary environment; complete it **before final teardown**. If already torn down, **skip lab 24** and use the README lab index for independent specialists.

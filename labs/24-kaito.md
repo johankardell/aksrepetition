@@ -2,13 +2,26 @@
 
 **Level:** advanced. **Type:** optional cumulative extension.
 
-**Customer:** an engineering team wants self-hosted inference for a synthetic order-support assistant, without turning an unauthenticated model endpoint into a public service. **Time:** 2-4 hours, including provisioning and cleanup. **Result:** a managed KAITO Workspace, verified GPU placement, a measured OpenAI-compatible request, a real network-denial/recovery exercise, and evidence that GPU compute was removed.
+**Customer:** an engineering team wants self-hosted inference for a synthetic order-support assistant, without turning an unauthenticated model endpoint into a public service. **Result:** a managed KAITO Workspace, verified GPU placement, a measured OpenAI-compatible request, a real network-denial/recovery exercise, and evidence that GPU compute was removed.
+
+## Lab contract
+
+| Field | This lab |
+|---|---|
+| Entry | Optional after 10–15 and **before teardown**; 20–23 are not prerequisites. Verify managed KAITO compatibility and GPU quota. |
+| Host and identity | Private management host with sourced Bastion; platform add-on/pool authority, not publisher or orders reconciler rights. |
+| Time | Estimate: 60–120 minutes active plus 30–120 minutes allocation/model/cleanup wait, within the approved four-hour window. |
+| Cost | One desired A100 node/Workspace, bounded requests, disk/downloads; desired count is not a spending cap. |
+| Changes | KAITO owns generated capacity/workload; platform owns isolated namespace, egress exception and cleanup baseline. |
+| Exit and re-entry | Model/denial evidence and GPU removal verified against saved baseline; interrupted runs inspect owned pools, never recapture the baseline. |
+
+Use the [session, evidence and cost operating contract](../docs/operations.md), [stage map](../docs/state.md) and [tooling/support baseline](../docs/operations.md#tooling-and-support). Times are estimates.
 
 **Prerequisites/re-entry.** Optional after labs 10-15, before final teardown. Keep their private management path, Cilium Overlay/UDR network, private ACR and healthy orders GitOps. Labs 20-23 are not prerequisites; if already completed, retain their governance, upgraded versions and restored primary-region state. Run from the repository root in Linux Bash with `jq`, `curl`, and Python 3 on the private management host. The operator needs AKS update and node-pool deletion authority plus Kubernetes platform administration; the image publisher and orders Flux service account must not receive these rights.
 
 The sourced `./scripts/use-lab.sh` helper supplies JSON strings `Lab` and `Outputs`, absolute repository path `Root`, and the strict `jq -er` accessors `lab_value KEY` and `output_value KEY`. Keep the original shell open between tasks, and never enable shell tracing or record transcripts while handling authentication material.
 
-Keep lab 10's native Bastion session alive for Kubernetes/Flux operations; second terminals share its exact temporary `KUBECONFIG` on the same host. The existing Bastion preview exception is for API connectivity only, not permission to enable unrelated preview GPU features. Do not overwrite the tunnel kubeconfig with fresh credentials.
+Keep the verified current-shell Bastion session alive for Kubernetes/Flux operations; if disconnected, use `source ./scripts/activate-aks-bastion.sh`. After lab 23, first close its dual-region sessions and return to an ordinary verified primary session. Second terminals share its exact temporary `KUBECONFIG` on the same host. The existing Bastion preview exception is for API connectivity only, not permission to enable unrelated preview GPU features. Do not overwrite the tunnel kubeconfig with fresh credentials.
 
 **Support gate.** Source review: **2026-10-01**. This exercise reviews **KAITO 0.6.0** and uses that release's `kaito.sh/v1beta1` Workspace and `phi-4-mini-instruct` preset, not an example downloaded from `main`. Microsoft's managed AI toolchain operator guide warns that the add-on typically lags upstream; it does not pin the deployed managed version to 0.6.0. Verify the actual controller image/version and supported AKS/region/SKU combination before submitting the Workspace. Public Azure regions and NVIDIA Linux GPU nodes are the path here; Windows and AMD GPU workspaces are excluded. Do not install an upstream KAITO Helm release, a second GPU operator, NAP or preview extensions over the managed add-on to repair a compatibility problem. The separate **fully managed GPU node-pool feature is preview** in the reviewed documentation and is not required here.
 
@@ -483,7 +496,7 @@ OrdersUri="${OrdersUri%/}"
 curl --fail-with-body --max-time 30 "$OrdersUri/readyz"
 ```
 
-Require healthy orders reconciliation/API and a healthy worker scaler; zero workers with an empty queue is normal. Preserve the primary cluster's progressed settings, not a redeployment of `infra/main.bicep`. Retain redacted evidence locally, check Cost Management after its reporting delay, and resume the next cumulative lab. GPU cleanup is immediate; regular lab infrastructure remains until the README's final teardown.
+Require healthy orders reconciliation/API and a healthy worker scaler; zero workers with an empty queue is normal. Preserve the primary cluster's progressed settings, not a redeployment of `infra/main.bicep`. Retain redacted evidence locally, check Cost Management after its reporting delay, and resume the next cumulative lab. GPU cleanup is immediate; regular lab infrastructure remains until [final teardown](../docs/operations.md#pausing-resuming-and-final-cleanup).
 
 </details>
 

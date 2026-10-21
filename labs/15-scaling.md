@@ -4,6 +4,21 @@
 
 **Scenario.** Interactive traffic needs ready API capacity; queued work can wait briefly and scale to zero. Demonstrate the different control loops, enforce bounds, and expose the boundary between retryable delivery and durable idempotency.
 
+## Lab contract
+
+| Field | This lab |
+|---|---|
+| Entry | Lab 14 observable traffic and healthy GitOps; Metrics Server and quota verified. |
+| Host and identity | Private consumer/build host with sourced Bastion; platform owns pools/KEDA federation, application reviewers own scaling specifications. |
+| Time | Estimate: 2–3 hours active plus 30–90 minutes add-on, scaling/cooldown and optional node allocation waits. |
+| Cost | Apps pool bounded 2–4, API 2–6, worker 0–5; optional Spot 0–1. Standing services remain; requests are not billing meters. |
+| Changes | HPA/KEDA own replicas; Flux owns templates/scalers; operator owns bounded load, pauses and cleanup. |
+| Exit and re-entry | Healthy autoscalers, drain/duplicate evidence and cost comparison; remove pause/fault/job/Spot overrides, preserve omitted Git replicas. |
+
+Use the [session, evidence and cost operating contract](../docs/operations.md), [stage map](../docs/state.md) and [duplicate/restart evidence contract](../docs/operations.md#duplicate-and-restart-evidence). Times are estimates.
+
+Use the [reviewed Git changes contract](../docs/operations.md#reviewed-git-changes) for every source change: inspect/stage only intended files on current `main`; the helper must confirm review/merge before reconciliation.
+
 **Prerequisites/re-entry.** Complete labs 10–14, with healthy GitOps and observable API/worker traffic. Use Bash on the private Linux management host with the Lab 14 tools (`jq`, `curl`, `python3`, `openssl` and the Azure/Kubernetes/Git CLIs). Start each terminal with `set -euo pipefail`; continue in the same terminal unless stated otherwise. Human platform access must permit add-on/pool configuration, managed-identity federation and queue-scoped role assignment. Never give these rights to the image publisher. The GA AKS Kubernetes version determines the supported managed KEDA version; do not install another KEDA Helm release. On re-entry, source `use-lab.sh`, reload the scaling outputs/client ID from directive 2, and set the trusted HTTPS URL again.
 
 **Architecture/ownership.** HPA controls `order-api` replicas from Metrics Server CPU; KEDA creates/owns the worker's HPA from queue length and activates it from zero. Cluster autoscaler (CA) adds/removes nodes for **unschedulable requested capacity**, not utilization alone. Flux owns autoscaler specifications and pod templates but **not Deployment replicas** after directive 3. KEDA polls Service Bus using its own operator service account's federation; the workload's federation alone is insufficient.
@@ -12,9 +27,18 @@
 
 **Important data limitation.** Before Lab 21, worker deduplication is **in-memory, per process**. It cannot guarantee duplicate-free effects across replicas, restarts or Spot eviction. This lab proves its boundary rather than claiming exactly-once delivery. The business-effect acceptance check is completed by re-running the duplicate/restart test after Lab 21's durable PostgreSQL unique-key writes. Only the lab's synthetic, disposable processing is interruption-tolerant today.
 
+## Resumable Parts and checkpoints
+
+| Part | Sections | Required checkpoint evidence | Resume/recovery gate |
+|---|---|---|---|
+| Part A — Ownership and bounded controllers | [1](#1-establish-bounds-and-capture-the-baseline)–[3](#3-transfer-replica-ownership-and-install-separate-autoscalers-in-git) | Baseline counts/quota, KEDA version/federation, reviewed SHA, omitted Deployment replicas and healthy distinct HPA targets. | Reload scaler outputs/client ID, trust and `UserUri`; inspect existing controllers instead of installing a second owner. |
+| Part B — Demand and capacity | [4](#4-demonstrate-api-hpa-with-bounded-cpu-demand)–[6](#6-exercise-a-bounded-node-scaling-event) | Timestamped load/SLIs, backlog/processed IDs, Pending/CA evidence and requests/usage. | Stop load, delete only `bounded-capacity`, verify pool bounds and queue drain; classify sufficient-capacity/no-scale observations honestly. |
+| Part C — Failure semantics | [7](#7-break-keda-authentication-in-a-reversible-way)–[8](#8-prove-duplicate-handling-restart-limitations-retry-and-dead-letter-paths) | Restored scaler identity, before/after worker identity and duplicate flags, identified poison message and qualified retry outcome. | Remove KEDA `paused-replicas`, resume/reconcile `orders` using section 8 cleanup; require healthy scaler before another load. |
+| Part D — Optional Spot, rightsizing and handoff | [9](#9-place-only-the-synthetic-worker-on-bounded-spot-capacity-and-test-interruption)–[10](#10-compare-napautomatic-and-reset-without-losing-the-scaling-design), [cost checkpoint](#measured-cost-and-rightsizing-checkpoint) | Spot executed/not-executed classification, regular-worker restoration, measured cost worksheet, cleanup SHA and final bounds. | Restore regular selector before deleting only optional pool; remove delay and restore any request experiment via Git, retain HPA/KEDA ownership and no live pauses. |
+
 ## Numbered directives
 
-Run Kubernetes/Flux commands inside the active native Bastion subshell on the private data-plane host. Extra terminals share its temporary `KUBECONFIG` as in README; reconnect before re-entry if the tunnel closed. HTTPS load reaches the internal gateway through the host's private network, not through Bastion's API tunnel.
+Run Kubernetes/Flux commands in the verified current-shell native Bastion session on the private data-plane host. If disconnected, use `source ./scripts/activate-aks-bastion.sh`; extra terminals follow the [shared-session contract](../docs/operations.md#bastion-sessions-and-data-plane-access). HTTPS load reaches the internal gateway through the host's private network, not through Bastion's API tunnel.
 
 ### 1. Establish bounds and capture the baseline
 
@@ -121,18 +145,13 @@ bash ./ops/add-gitops-file.sh --source ./ops/scaling/api-hpa.yaml
 bash ./ops/add-gitops-file.sh --source .artifacts/scaling/worker-keda.yaml
 bash ./ops/add-gitops-file.sh --source ./ops/scaling/worker-delay-patch.yaml --kind Patch
 kubectl kustomize "$OrdersPath"
-git switch -c enable-bounded-scaling
-git add gitops
-git commit -m "Transfer replicas to HPA and KEDA with explicit limits"
-git push -u origin HEAD
-gh pr create --base main --fill
+git add ./gitops/clusters/primary/apps/orders
+bash ./ops/publish-reviewed-change.sh --message "Transfer replicas to HPA and KEDA with explicit limits"
 ```
 
-Review/merge, then:
+After the helper confirms review/merge:
 
 ```bash
-git switch main
-git pull --ff-only
 flux reconcile kustomization orders --with-source
 kubectl -n orders get hpa,scaledobject,triggerauthentication
 kubectl -n orders describe scaledobject order-worker
@@ -321,6 +340,8 @@ Restoring the Git identityId fixes only this injection. Real failures also requi
 
 **Challenge:** use a single temporarily paused worker to compare same-process and post-restart duplicate handling, inspect a controlled poison message and attempt an interrupted receive/retry. Repeat the business-effect acceptance check after Lab 21.
 
+Use the shared [duplicate and restart evidence contract](../docs/operations.md#duplicate-and-restart-evidence): retain the same ID **and item**, worker pod UID/restart boundary, UTC/log flags and queue/dead-letter baseline. Lab 15 expects **state loss after restart** (`duplicate:false`, `durable:false`); lab 21 expects retained uniqueness (`duplicate:true`, `durable:true`, one original SQL row). A 202, queue drain or replacement pod alone satisfies neither contract. Record not-executed/inconclusive phases rather than assuming a retry occurred.
+
 **Constraints:** use only synthetic disposable messages and the existing API/worker identities. Pause with KEDA's annotation, not another HPA. Never claim exactly-once behavior before durable storage; even a database PK cannot atomically cover unrelated external effects. Pod-interruption timing is nondeterministic, so report an inconclusive retry honestly.
 
 **Exit evidence:** retain matching IDs and duplicate/durable flags before/after restart, dead-letter reason/count delta and an honestly classified retry attempt. After Lab 21 require a duplicate after restart and one persisted business row. Leave dead-letter evidence for Lab 21/debrief; replay/purge only identified test messages, never delete/recreate the queue.
@@ -454,11 +475,8 @@ az aks nodepool add -g "$(lab_value ResourceGroup)" --cluster-name "$(lab_value 
   --vnet-subnet-id "$(output_value nodesSubnetId)" \
   --node-taints kubernetes.azure.com/scalesetpriority=spot:NoSchedule
 bash ./ops/add-gitops-file.sh --source ./ops/scaling/spot-worker-patch.yaml --kind Patch
-git switch -c exercise-spot-worker
-git add gitops
-git commit -m "Place interruption-tolerant synthetic workers on bounded Spot"
-git push -u origin HEAD
-gh pr create --base main --fill
+git add ./gitops/clusters/primary/apps/orders
+bash ./ops/publish-reviewed-change.sh --message "Place interruption-tolerant synthetic workers on bounded Spot"
 ```
 
 `--spot-max-price -1` means price up to the on-demand price without price-based eviction; it does **not** guarantee allocation or protect against capacity eviction. Node count is bounded but disk/log/network charges are additional. Use an explicit numeric maximum only after checking current regional pricing and accepting higher eviction probability.
@@ -466,8 +484,6 @@ gh pr create --base main --fill
 After merge:
 
 ```bash
-git switch main
-git pull --ff-only
 flux reconcile kustomization orders --with-source
 bash ./ops/invoke-order-load.sh --base-uri "$UserUri" --count 100 --concurrency 4 \
   --duration-seconds 60 --output-path .artifacts/spot-load.json
@@ -497,15 +513,9 @@ kubectl -n orders get events --sort-by=.lastTimestamp
 For regular fallback, remove `spot-worker-patch.yaml` and its `patches` entry from the Git-owned orders directory via a reviewed PR, merge and reconcile. This restores the original `agentpool: apps` selector; no automatic regular-capacity fallback was configured. Verify worker placement/backlog draining, then delete only the optional Spot pool:
 
 ```bash
-git switch -c return-workers-to-regular
 bash ./ops/remove-gitops-file.sh --name spot-worker-patch.yaml
-git add gitops
-git commit -m "Return workers to regular capacity after Spot exercise"
-git push -u origin HEAD
-gh pr create --base main --fill
-# After review/merge:
-git switch main
-git pull --ff-only
+git add ./gitops/clusters/primary/apps/orders
+bash ./ops/publish-reviewed-change.sh --message "Return workers to regular capacity after Spot exercise"
 flux reconcile kustomization orders --with-source
 kubectl -n orders get pods -l app=order-worker -o wide
 az aks nodepool delete -g "$(lab_value ResourceGroup)" --cluster-name "$(lab_value ClusterName)" -n workerspot
@@ -561,15 +571,9 @@ For a separately approved NAP comparison, reproduce the job's requested-capacity
 For normal reset, remove the two-second `worker-delay-patch.yaml` and its `patches` entry from Git through review, merge, reconcile, then confirm empty active queue and healthy autoscalers. Retain HPA/KEDA and omitted Deployment replicas for later labs. If baseline resilience calls for three regular apps nodes, restore CA minimum three while retaining maximum four:
 
 ```bash
-git switch -c restore-normal-worker-throughput
 bash ./ops/remove-gitops-file.sh --name worker-delay-patch.yaml
-git add gitops
-git commit -m "Remove synthetic processing delay"
-git push -u origin HEAD
-gh pr create --base main --fill
-# After review/merge:
-git switch main
-git pull --ff-only
+git add ./gitops/clusters/primary/apps/orders
+bash ./ops/publish-reviewed-change.sh --message "Remove synthetic processing delay"
 az aks nodepool update -g "$(lab_value ResourceGroup)" --cluster-name "$(lab_value ClusterName)" -n apps \
   --update-cluster-autoscaler --min-count 3 --max-count 4
 flux reconcile kustomization orders --with-source
@@ -590,6 +594,95 @@ Require a healthy scaler and no temporary pause; `Active=False` and zero workers
 For **final teardown only**, remove HPA/ScaledObject/TriggerAuthentication through Git before disabling KEDA; restore intentional fixed replicas if keeping the workloads. Remove the dedicated scaler identity's `keda-operator` federation and the `scaling-identity` deployment's recorded `scalerRoleId` role assignment, then delete that scaler identity (the worker and its receiver role belong to foundation). Then run `az aks update -g "$(lab_value ResourceGroup)" -n "$(lab_value ClusterName)" --disable-keda` and follow root cleanup. Deleting a Bicep deployment record does **not** delete its resources. Persistent nodes, disks, messages and monitoring charges outlive a stopped load generator.
 
 </details>
+
+## Measured cost and rightsizing checkpoint
+
+Complete this after section 10's reset, with the queue drained, no competing loads and normal regular-pool placement. **Required deliverable:** a timestamped before/after resource-and-SLI worksheet plus a cost interpretation. Baseline measurement is read-only. If the evidence or reviewer does not justify a change, record **change not executed**, explain why and retain the baseline; do not lower requests merely to show a smaller number.
+
+Capture actual requests/limits, current usage and per-node allocated resources. Missing metrics are not zero. These reads do not resize pools:
+
+```bash
+mkdir -p .artifacts/rightsizing
+date -u +%FT%TZ > .artifacts/rightsizing/baseline-utc.txt
+kubectl -n orders get deployment order-api -o json |
+  jq '{replicas:.spec.replicas,containers:[.spec.template.spec.containers[] | {name,resources}]}' \
+  > .artifacts/rightsizing/baseline-requests.json
+kubectl -n orders top pods --containers > .artifacts/rightsizing/baseline-usage.txt
+kubectl describe nodes -l agentpool=apps > .artifacts/rightsizing/baseline-nodes.txt
+az aks nodepool list -g "$(lab_value ResourceGroup)" --cluster-name "$(lab_value ClusterName)" \
+  --query '[].{name:name,sku:vmSize,count:count,min:minCount,max:maxCount}' -o json \
+  > .artifacts/rightsizing/baseline-pools.json
+bash ./ops/invoke-order-load.sh --base-uri "$UserUri" --operation Browse \
+  --count 600 --concurrency 1 --duration-seconds 120 --delay-milliseconds 250 \
+  --output-path .artifacts/rightsizing/before.json
+for ((Sample=0; Sample<6; Sample++)); do
+  date -u +%FT%TZ
+  kubectl -n orders top pods --containers
+  kubectl -n orders get hpa order-api
+  sleep 10
+done | tee .artifacts/rightsizing/before-samples.txt
+```
+
+Also inspect the matching 120-second interval in lab 14's telemetry and collect `top`/HPA samples in a same-host second terminal **during** the load. The loop above records recovery/idle samples, not a substitute for peak history. Note pod churn and compare requests with observed peaks/p95, not one idle `top` value.
+
+**Optional approved small change:** only if observed CPU plus the agreed headroom fits 200m and memory is healthy, propose API CPU request **250m → 200m**, keeping memory, limits, replica bounds and node bounds unchanged. The 60% HPA target moves from 150m to 120m CPU per pod; it can increase replicas and offset any packing benefit. Validate the exact base request first; a progressed/custom value requires its own review, not this replacement.
+
+```bash
+python3 - <<'PY'
+from pathlib import Path
+path = Path("gitops/clusters/primary/apps/orders/api.yaml")
+text = path.read_text()
+old = "            requests:\n              cpu: 250m\n"
+if text.count(old) != 1:
+    raise SystemExit("Expected one baseline API CPU request; inspect current effective configuration.")
+path.write_text(text.replace(old, "            requests:\n              cpu: 200m\n", 1))
+PY
+kubectl kustomize ./gitops/clusters/primary/apps/orders
+git diff -- ./gitops/clusters/primary/apps/orders/api.yaml
+git add ./gitops/clusters/primary/apps/orders/api.yaml
+bash ./ops/publish-reviewed-change.sh --message "Measure bounded API request rightsizing"
+flux reconcile kustomization orders --with-source
+kubectl -n orders rollout status deployment/order-api --timeout=300s
+```
+
+Confirm the **effective rendered/live request** is 200m, wait for stable metrics/replicas, then repeat exactly the same finite Browse load and observation window:
+
+```bash
+kubectl -n orders get deployment order-api -o json |
+  jq '.spec.template.spec.containers[] | {name,resources}'
+bash ./ops/invoke-order-load.sh --base-uri "$UserUri" --operation Browse \
+  --count 600 --concurrency 1 --duration-seconds 120 --delay-milliseconds 250 \
+  --output-path .artifacts/rightsizing/after.json
+kubectl -n orders top pods --containers
+kubectl -n orders get hpa order-api
+kubectl get nodes -l agentpool=apps
+jq '{startedUtc,elapsedSeconds,sent,availabilityPercent,p95Milliseconds}' \
+  .artifacts/rightsizing/before.json .artifacts/rightsizing/after.json
+```
+
+Stop and restore on availability below 99%, p95 above 1 second, new throttling/OOM evidence or unexplained replica/node growth; investigate even if both windows pass. The short sequential windows are a bounded comparison, **not production sizing or a controlled benchmark**. Record CPU/memory usage, requests, replica/node counts, elapsed node-hours and measured SLIs separately from projected savings.
+
+Restore the original request through review before the cumulative handoff (also the re-entry recovery for this experiment):
+
+```bash
+python3 - <<'PY'
+from pathlib import Path
+path = Path("gitops/clusters/primary/apps/orders/api.yaml")
+text = path.read_text()
+old = "            requests:\n              cpu: 200m\n"
+if text.count(old) != 1:
+    raise SystemExit("Inspect the experiment's current request before restoring its exact baseline.")
+path.write_text(text.replace(old, "            requests:\n              cpu: 250m\n", 1))
+PY
+kubectl kustomize ./gitops/clusters/primary/apps/orders
+git add ./gitops/clusters/primary/apps/orders/api.yaml
+bash ./ops/publish-reviewed-change.sh --message "Restore baseline API request after rightsizing measurement"
+flux reconcile kustomization orders --with-source
+kubectl -n orders rollout status deployment/order-api --timeout=300s
+kubectl -n orders get hpa,scaledobject,deployments
+```
+
+For the cost worksheet, attach the subscription owner's **read-only Cost Management export** for the dedicated groups and matching UTC period when billing data becomes available. Separate node VM/disks, Firewall/Bastion, Premium services, GPU/Spot if used, and monitoring/retention. Multiply observed node-hours by a dated regional rate only as an **estimate**, recording currency, region, SKU, discounts/tax exclusions and billing delay. Requests are scheduler reservations, not Azure charges; unchanged nodes and standing resources can mean **no bill reduction** despite smaller requests. Do not attribute a delayed invoice change to this short experiment without matching resource/time evidence.
 
 ## Customer discovery and model answers
 

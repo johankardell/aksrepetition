@@ -2,7 +2,20 @@
 
 **Level:** intermediate. **Scenario:** security rejects connection strings and a shared application identity. Demonstrate separately authorized API/worker access and explain what actually happens during token exchange.
 
-**Prerequisite:** lab 10 healthy, no Flux reconciliation yet. Keep or restart the native Bastion session and API port-forward; run Kubernetes commands in its subshell or a same-host terminal sharing its active temporary `KUBECONFIG`. Run Bash at the repository root; all resource names come from `source ./scripts/use-lab.sh`. Additional cost is limited to synthetic traffic and secret operations on existing resources; Bastion continues billing while deployed.
+## Lab contract
+
+| Field | This lab |
+|---|---|
+| Entry | Healthy lab 10, before Flux; [lab 27 Tier 1](27-kustomize.md#tier-1---easy-create-and-transform-a-base) is recommended offline preparation for manifest composition. |
+| Host and identity | Private build VM; current-shell Bastion operator, separate human Secrets Officer and API/worker workload identities. |
+| Time | Estimate: 60–90 minutes active plus 15–30 minutes federation/CSI rotation wait. |
+| Cost | Existing queue/vault traffic and logs; temporary human role, no new compute. |
+| Changes | Operator adds CSI to accumulated rendered base; platform owns federation and human role removal. |
+| Exit and re-entry | Attributed worker 403, live rotation and restored federation with a fresh processed ID; recover subject before pausing and never rerender the base. |
+
+Use the [session, evidence and cost operating contract](../docs/operations.md) and [stage map](../docs/state.md). Kustomize composes manifests; delivery/reconciliation begins in lab 13. Times are estimates.
+
+**Prerequisite:** lab 10 healthy, no Flux reconciliation yet. Keep the verified current-shell session, or reconnect with `source ./scripts/activate-aks-bastion.sh` before restarting the API port-forward. Extra terminals share the active temporary `KUBECONFIG` on the same host. Run Bash at the repository root; all resource names come from `source ./scripts/use-lab.sh`. Additional cost is limited to synthetic traffic and secret operations on existing resources; Bastion continues billing while deployed.
 
 ## Directives
 

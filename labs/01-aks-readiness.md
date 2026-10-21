@@ -4,11 +4,24 @@
 
 **Outcome:** an approved platform decision, supported regional version and capacity choice, and validated local bootstrap configuration. This is AKS operations practice, not a tour of Kubernetes objects.
 
+## Lab contract
+
+| Field | This lab |
+|---|---|
+| Entry | New learner; no foundation required. Existing learners identify their stage before bootstrap. |
+| Host and identity | Bootstrap workstation; approved tenant/subscription, deployment and role-assignment operator, existing Entra admin group. |
+| Time | Estimate: 45–75 minutes active; 0–15 minutes Azure discovery/registration wait, excluding quota approval. |
+| Cost | No cluster; bootstrap may create an empty group. Approve the full six-node foundation, not just AKS compute. |
+| Changes | Operator owns settings, separate SSH keys, address/capacity plan and cost approval. |
+| Exit and re-entry | Retain the private readiness worksheet and settings; unresolved quota, support or permissions remain no-go. Never replace existing keys. |
+
+Use the [session, evidence and cost operating contract](../docs/operations.md) and [stage map](../docs/state.md). Times are planning estimates, not measured results.
+
 ## Prerequisites and resource boundary
 
 Use a dedicated subscription and a Linux workstation with Bash 5+, Git, `jq`, Azure CLI 2.90+, Bicep and OpenSSH. Run commands from the repository root. You need resource deployment and role-assignment authority, plus membership in an existing Entra security group approved for cluster administration. Subscription ownership does not grant directory group-creation rights.
 
-No cluster is deployed in this lab. The README bootstrap creates a dedicated resource group and local key/configuration files. **Lab 2 deploys the whole enterprise foundation**, not a low-cost starter cluster: six AKS nodes, a private build VM, Bastion Standard, Azure Firewall Standard, Premium ACR and Service Bus, Key Vault and Log Analytics. Later beginner labs reuse these resources. Obtain approval for the complete footprint first; budgets are alerts, not spending caps.
+No cluster is deployed in this lab. The [bootstrap contract](../docs/operations.md#bootstrap-configuration) creates a dedicated resource group and local key/configuration files. **Lab 2 deploys the whole enterprise foundation**, not a low-cost starter cluster: six AKS nodes, a private build VM, Bastion Standard, Azure Firewall Standard, Premium ACR and Service Bus, Key Vault and Log Analytics. Later beginner labs reuse these resources. Obtain approval for the complete footprint first; budgets are alerts, not spending caps.
 
 Already have a foundation or progressed checkout? Do not overwrite settings, regenerate keys or start a second environment. Use [lab 10's entry paths](10-baseline.md#entry-paths) to identify where to resume.
 
@@ -41,12 +54,12 @@ Azure creates a separate **node resource group** containing managed infrastructu
 
 ### 2. Select a region, supported version and capacity envelope
 
-**Task:** complete the [README bootstrap configuration](../README.md#bootstrap-configuration), including editing every `REPLACE` value, region/version discovery, creating the dedicated group, and creating the two distinct RSA key pairs. Keep existing files intact.
+**Task:** complete the [bootstrap configuration](../docs/operations.md#bootstrap-configuration), including editing every `REPLACE` value, region/version discovery, creating the dedicated group, and creating the two distinct RSA key pairs. Keep existing files intact.
 
 <details>
 <summary>Solution</summary>
 
-Use the README's configuration block as the single schema, rather than creating a different beginner settings format. Choose a private lab hostname now for later networking work; you do not need to publish it in this lab. Select a distinct secondary region for the later capstone.
+Use the operating guide's configuration block as the single schema, rather than creating a different beginner settings format. Choose a private lab hostname now for later networking work; you do not need to publish it in this lab. Select a distinct secondary region for the later capstone.
 
 After bootstrap, verify the active context and recheck the regional choices:
 
@@ -72,7 +85,7 @@ Inspect the template address plan: spoke `10.40.0.0/16`, hub `10.50.0.0/16`, ove
 
 ### 3. Prove permission and cost readiness
 
-**Task:** identify the administrator group and distinguish resource deployment rights from role-assignment and Kubernetes rights. Get an owner to approve the [full resource inventory](../README.md#before-spending-anything).
+**Task:** identify the administrator group and distinguish resource deployment rights from role-assignment and Kubernetes rights. Get an owner to approve the [full resource inventory](../docs/operations.md#before-spending-anything).
 
 <details>
 <summary>Solution</summary>
@@ -117,7 +130,7 @@ Neither is implied. The learning steps are beginner-friendly, but they share the
 
 ## Cleanup and next step
 
-No foundation exists yet. Retain settings/public keys and continue to [lab 2](02-provision-aks.md). Do not commit keys, settings or subscription evidence. If abandoning the exercise, inspect the dedicated group before using the [README final cleanup](../README.md#pausing-resuming-and-final-cleanup); never delete a group merely because its name resembles an example.
+No foundation exists yet. Retain settings/public keys and continue to [lab 2](02-provision-aks.md). Do not commit keys, settings or subscription evidence. If abandoning the exercise, inspect the dedicated group before using the [final cleanup guide](../docs/operations.md#pausing-resuming-and-final-cleanup); never delete a group merely because its name resembles an example.
 
 ## References
 

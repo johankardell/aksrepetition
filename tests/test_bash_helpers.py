@@ -608,6 +608,23 @@ printf '%s' "$KUBECONFIG" > "$TEST_ROOT/restored-kubeconfig"
         self.assertFalse((target / "extra.yaml").exists())
         self.run_script("ops/remove-gitops-file.sh", "--name", "../bad.yaml", success=False)
 
+    def test_renderer_refuses_accumulated_and_gitops_owned_state(self):
+        source = self.root / "rendered/base"
+        source.mkdir(parents=True)
+        sentinel = source / "kustomization.yaml"
+        sentinel.write_text("retained CSI and network state\n")
+        result = self.run_script("scripts/render-manifests.sh", success=False)
+        self.assertIn("Existing rendered/base", result.stderr)
+        self.assertEqual(sentinel.read_text(), "retained CSI and network state\n")
+        sentinel.unlink()
+        source.rmdir()
+        target = self.root / "gitops/clusters/primary/apps/orders"
+        target.mkdir(parents=True)
+        (target / "kustomization.yaml").write_text("authoritative Git state\n")
+        result = self.run_script("scripts/render-manifests.sh", success=False)
+        self.assertIn("GitOps already owns", result.stderr)
+        self.assertFalse(source.exists())
+
     def test_foundation_is_what_if_by_default(self):
         keys = self.root / "rendered/keys"
         keys.mkdir(parents=True)

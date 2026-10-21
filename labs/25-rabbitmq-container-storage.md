@@ -4,13 +4,28 @@
 
 **Outcome:** a measured comparison between ordinary Azure Disk CSI persistence and Azure Container Storage 2.x backed by local NVMe. Both deployments keep one PV and PVC per RabbitMQ member and spread the three members across three AKS nodes. The comparison distinguishes Kubernetes volume count, Azure managed-disk attachments, physical local devices, performance, and durability rather than claiming that a storage layer makes RabbitMQ stateless.
 
+## Lab contract
+
+| Field | This lab |
+|---|---|
+| Entry | Optional standalone exercise; no cumulative deployment required. Approve local-NVMe durability limits and regional support. |
+| Host and identity | Separate Linux session and isolated kubeconfig; authorized AKS/extension operator. Shown create command uses a public API, not cumulative Bastion. |
+| Time | Estimate: 90–150 minutes active plus 30–90 minutes provisioning/extension/storage waits; four-hour allocation deadline. |
+| Cost | Two system and three storage nodes, managed baseline disks, local-NVMe capacity, extension/traffic; Elastic SAN is design-only. |
+| Changes | Operator owns dedicated group; RabbitMQ/Container Storage controllers own generated objects; no cumulative mutations. |
+| Exit and re-entry | Compare PVCs, managed attachments and message integrity; restore saved working folder/context and inspect allocations before resuming or dedicated teardown. |
+
+Use the [session, evidence and cost operating contract](../docs/operations.md), [stage map](../docs/state.md) and [tooling/support baseline](../docs/operations.md#tooling-and-support). Times are estimates.
+
 This lab creates a dedicated resource group and AKS cluster. It does not use or modify the cumulative labs 10-15 and 20-23 environment.
 
-Use a separate Bash session outside the cumulative Bastion subshell, on a host with private routing/DNS to this lab's dedicated cluster. The working-folder kubeconfig below is isolated from both your default config and any active cumulative tunnel; that tunnel does not reach this independent API.
+Use a separate Bash session outside any cumulative Bastion session. **The actual `az aks create` below has no `--enable-private-cluster`, custom VNet or Bastion flags: it creates a public API endpoint.** Use an approved workstation with HTTPS reachability and credential-retrieval rights; the workload Services remain private ClusterIP. The isolated working-folder kubeconfig does not reuse your default or cumulative tunnel configuration. This standalone example does not reproduce the foundation's Entra-only/private-API hardening.
+
+If policy requires a private API, stop before creation. An operator must separately provision/review a private-cluster creation variant and a management host with routing and private DNS to its generated VNet (or a dedicated supported Bastion path). **None of that management connectivity is created by this lab**, and the cumulative tunnel is not a route to this new cluster. Do not simply add a private flag and assume `get-credentials` makes the API reachable.
 
 ## Prerequisites, cost, and safety boundary
 
-Use Azure CLI 2.83.0 or later, Linux Bash, `jq`, `curl`, `gh`, `kubectl`, and an account that can create AKS resources and role assignments in a dedicated subscription or resource group. Install or update the `k8s-extension` CLI extension. Select a region supported by Azure Container Storage and a storage-optimized VM SKU with local NVMe capacity and sufficient quota.
+Use the reviewed Azure CLI **2.90+** baseline, Linux Bash, `jq`, `curl`, `gh`, `kubectl`, and an account that can create AKS resources and role assignments in a dedicated subscription or resource group. The Container Storage guide's **2.83.0 service minimum** is not this curriculum's reviewed baseline; check [tooling and support](../docs/operations.md#tooling-and-support). Install or update the `k8s-extension` CLI extension. Select a region supported by Azure Container Storage and a storage-optimized VM SKU with local NVMe capacity and sufficient quota.
 
 Budget for two small system nodes and three storage-optimized user nodes for the duration of the exercise. `Standard_L8s_v3` is an example discovery candidate, not a promise of regional availability or the right production size. Use managed OS disks on a VM size that leaves local NVMe devices available to Azure Container Storage. The local-NVMe path is **ephemeral**: deleting, deallocating, reimaging, or replacing a node can destroy the data on that node.
 

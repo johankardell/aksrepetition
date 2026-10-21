@@ -4,13 +4,34 @@
 
 **Scenario.** A platform team needs auditable releases without giving an image-build pipeline Kubernetes access. Build once, promote an immutable digest, reconcile desired state, and recover through Git.
 
+## Lab contract
+
+| Field | This lab |
+|---|---|
+| Entry | Labs 10–12; accumulated CSI/policies, private HTTPS and existing protected Git repository. Recommended: [lab 27 Tier 2](27-kustomize.md#tier-2---medium-create-development-and-production-overlays) for composition, not delivery. |
+| Host and identity | Private management VM with sourced Bastion; isolated private publisher runner uses OIDC; platform bootstrap and namespace reconciler permissions stay separate. |
+| Time | Estimate: 2–3 hours active plus 30–90 minutes runner/build/reconciliation waits, excluding human review queues. |
+| Cost | Adds publisher/test identities, test queue/replicas and runner/image storage; retained foundation still bills. |
+| Changes | Platform Git owns namespaces/RBAC; namespace Flux owns app state; gateway/TLS remain with lab 12 platform owner. |
+| Exit and re-entry | Reviewed SHA/digest, test/promotion and recovery evidence; never initialize again. Resolve pending PR/bootstrap credentials and resume only the named reconciler. |
+
+Use the [session, evidence and cost operating contract](../docs/operations.md) and [stage map](../docs/state.md). Times are planning estimates, not measured results.
+
 **Prerequisites/re-entry.** Complete labs 10–12. Use Bash at the repository root on the VNet-connected Linux management host. `local.settings.json`, `foundation`, private DNS, HTTPS application access and working Workload ID must exist. Install the supported Flux CLI, GitHub CLI, Git, Azure CLI, jq, kubectl, kubelogin, dig, getent, OpenSSL and curl on that host; a **separate operator-provisioned Linux runner** needs rootless Podman with SBOM and digest-file support, Bash, jq and Azure CLI. Podman commands below run on a Linux host with private ACR connectivity; they need not run on the management host. Re-export the lab 12 CA bundle variables in each new terminal before ordinary HTTPS calls. An existing private GitHub repository, permission to configure its environments/runners, and a protected `main` branch are required. No command here creates a GitHub repository.
 
 **Ownership/path.** CI → Entra OIDC → ACR private endpoint writes images only. Flux → HTTPS Git with a repository credential pulls manifests; kubelet → ACR with its existing pull identity fetches images. GitHub OIDC is **not** authentication from Flux to a private Git repository. Platform bootstrap reconciles `gitops/clusters/primary`; the **`orders` Kustomization in `flux-system`** reconciles `gitops/clusters/primary/apps/orders`. `orders-test` uses its own namespace, queue and two managed identities. It is still the same cluster and Service Bus namespace, not a production isolation boundary.
 
-Start `scripts/connect-aks-bastion.sh` on the private management host and run Kubernetes/Flux commands in its subshell. Extra terminals share its exact active temporary `KUBECONFIG` as in README; do not fetch credentials over that file. Private ACR/DNS/HTTPS tests still use the host's data-plane connectivity, not the API tunnel.
+Keep the verified current-shell session or reconnect with `source ./scripts/activate-aks-bastion.sh` on the private management host. Run Kubernetes/Flux commands in that shell. Extra terminals use the [shared-session contract](../docs/operations.md#bastion-sessions-and-data-plane-access); do not fetch credentials over that file. Private ACR/DNS/HTTPS tests still use the host's data-plane connectivity, not the API tunnel.
 
 **Inventory/permissions/cost.** Reuse AKS, ACR Premium, Service Bus Premium, Firewall and private management connectivity. Add three user-assigned managed identities, three federations and one queue; identities have no hourly compute charge, while runner VM/storage, image storage, registry transfers and extra test replicas do. A human temporarily needs the AKS **Azure Kubernetes Service RBAC Cluster Admin** role for Flux CRDs/bootstrap, not `--admin` credentials. Its standing application role remains namespace scoped. The infrastructure operator needs resource deployment and role-assignment permissions. CI receives only **AcrPush on this registry** (classic RBAC registry mode); it receives no AKS, subscription Contributor, Key Vault or Service Bus role. With ABAC-enabled ACR, use repository-scoped repository writer permissions instead of assuming AcrPush works.
+
+## Resumable Parts and checkpoints
+
+| Part | Sections | Required checkpoint evidence | Resume/recovery gate |
+|---|---|---|---|
+| Part A — Private delivery prerequisites | [1](#1-establish-the-context-and-verify-private-paths)–[3](#3-publish-once-record-its-digest-and-mirror-platform-controller-images) | Correct private remote, ignored local state, runner/federation scope, run ID, exact image digest and mirrored controller inventory. | Reload `GitHubRepository`, delivery outputs and selected artifact; do not start a second build to replace a missing release record. |
+| Part B — One-time ownership transfer | [4](#4-transfer-application-ownership-to-git-not-live-yaml-patches)–[5](#5-bootstrap-against-the-existing-repository-and-reduce-runtime-git-permission) | Reviewed adoption SHA, preserved CSI/policies, scoped app reconcilers, Ready revisions, read-only runtime credential. | Inspect existing Git/bootstrap state before continuing; never reinitialize/rerender. Finish pending PRs, remove bootstrap exception and revoke only replaced credentials. |
+| Part C — Promotion and recovery | [6](#6-validate-in-test-and-promote-the-exact-same-digest-by-pull-request)–[8](#8-capture-handover-evidence-and-control-costs) | Test IDs, promoted digest, current config value, missing-image diagnosis and recovered Ready revision. | Restore the verified test digest through review; resume only affected child, verify both deployments and keep rollback image content. |
 
 ## Numbered directives
 
@@ -186,6 +207,8 @@ git switch main
 git pull --ff-only
 ```
 
+This is the full manual review cycle: branch, inspect/stage, commit, push, PR, independent approval/merge, then updated `main`. For subsequent changes use the [reviewed Git changes contract](../docs/operations.md#reviewed-git-changes): stage only the intended files and run `bash ./ops/publish-reviewed-change.sh --message "..."`. It requires current `main`, creates the branch/PR and waits for your normal review; it never approves or merges. A stopped/pending helper is **not permission to reconcile**. Finish that PR and return to updated `main` before proceeding.
+
 `orders-test` has test identity client IDs and `QUEUE_NAME=orders-test`; `orders` keeps its original identities/queue. The initialization script copies application/network sources, not runtime secrets or local settings.
 
 The **accumulated** rendered base is the adoption contract. **Do not run `render-manifests.sh` again here**: that would lose Lab 11's identity and Lab 12's policy additions. Initialization copies the complete accumulated directory, including `secret-provider.yaml`, `identity-patch.yaml`, `policies.yaml` and their Kustomize entries. It then removes only the Namespace resource reference from each app Kustomization because Namespace reconciliation belongs to the platform root (the copied Namespace file remains an unreferenced snapshot).
@@ -262,19 +285,14 @@ In the original terminal:
 ```bash
 bash ./ops/invoke-order-load.sh --base-uri http://127.0.0.1:8082 --count 10 --concurrency 1 --output-path .artifacts/test-release.json
 kubectl -n orders-test logs deployment/order-worker --tail=30
-git switch -c promote-orders-digest
 bash ./ops/set-gitops-image.sh --namespace orders --digest "$Digest"
-git add gitops
-git commit -m "Promote verified orders image digest"
-git push -u origin HEAD
-gh pr create --repo "$GitHubRepository" --base main --fill
+git add ./gitops/clusters/primary/apps/orders
+bash ./ops/publish-reviewed-change.sh --message "Promote verified orders image digest"
 ```
 
-Have the designated reviewer approve and merge the PR using the organization's normal workflow. Stop the test port-forward with Ctrl+C. After merge:
+The helper returns only after the designated reviewer merges through the protected workflow. Stop the test port-forward with Ctrl+C, then verify:
 
 ```bash
-git switch main
-git pull --ff-only
 flux reconcile kustomization orders --with-source
 kubectl -n orders rollout status deployment/order-api --timeout=300s
 kubectl -n orders get deployments -o 'jsonpath={range .items[*]}{.metadata.name}{" "}{.spec.template.spec.containers[0].image}{"\n"}{end}'
@@ -310,20 +328,15 @@ kubectl -n orders get deployment order-api
 Make an intentionally nonexistent digest only in **test**, through a reviewed change:
 
 ```bash
-git switch -c inject-bad-test-release
 printf -v BadDigest 'sha256:%064d' 0
 bash ./ops/set-gitops-image.sh --namespace orders-test --digest "$BadDigest"
-git add gitops
-git commit -m "Exercise a deliberately missing test image"
-git push -u origin HEAD
-gh pr create --repo "$GitHubRepository" --base main --fill
+git add ./gitops/clusters/primary/apps/orders-test
+bash ./ops/publish-reviewed-change.sh --message "Exercise a deliberately missing test image"
 ```
 
 After approving/merging this explicitly labeled fault:
 
 ```bash
-git switch main
-git pull --ff-only
 BadCommit=$(git rev-parse HEAD)
 ```
 
@@ -349,15 +362,9 @@ flux get kustomizations
 Restore the verified digest through a new PR (works for merge, rebase or squash histories; no assumption about merge-commit parentage):
 
 ```bash
-git switch -c repair-test-release
 bash ./ops/set-gitops-image.sh --namespace orders-test --digest "$Digest"
-git add gitops
-git commit -m "Restore verified test image after controlled failure"
-git push -u origin HEAD
-gh pr create --repo "$GitHubRepository" --base main --fill
-# After approval/merge:
-git switch main
-git pull --ff-only
+git add ./gitops/clusters/primary/apps/orders-test
+bash ./ops/publish-reviewed-change.sh --message "Restore verified test image after controlled failure"
 flux reconcile kustomization orders-test --with-source
 kubectl -n orders-test rollout status deployment/order-api --timeout=300s
 ```
@@ -437,6 +444,8 @@ Declare incident ownership; suspend the smallest reconciliation scope, make an a
 </details>
 
 ## References and support
+
+Optional extensions, not cumulative prerequisites: [workload reliability](../workshops/workload-reliability.md) uses an isolated namespace; [API authentication](../workshops/api-authentication.md) opts in only the test namespace while leaving cumulative defaults unchanged; [artifact trust](../workshops/artifact-trust.md) separates digest evidence from signatures, attestations and enforcement.
 
 Source review: **2026-09-10**. Required path: supported Flux v2 APIs, stable Kubernetes APIs, Entra federation and GA private ACR. Flux is upstream self-managed here, **not** the Azure Flux extension—do not install both as competing owners. No Azure execution was performed while authoring.
 

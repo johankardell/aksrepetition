@@ -2,15 +2,30 @@
 
 **Level:** advanced.
 
-**Customer:** two internal teams need delegated delivery, not cluster administration. **Time:** 2–3 hours, including asynchronous policy evaluation. **Result:** attributed authorization, admission and quota denials; a narrow exception with an expiry; Defender coverage evidence.
+**Customer:** two internal teams need delegated delivery, not cluster administration. **Result:** attributed authorization, admission and quota denials; a narrow exception with an expiry; Defender coverage evidence.
+
+## Lab contract
+
+| Field | This lab |
+|---|---|
+| Entry | Labs 10–15; cooperating internal teams, not hostile tenant isolation. |
+| Host and identity | Private operator host with sourced Bastion; separate team-member Entra sessions/tunnels prove real least privilege. |
+| Time | Estimate: 90–150 minutes active plus 30–60 minutes role/policy/Defender evaluation waits. |
+| Cost | Test namespace capacity and subscription-scoped Defender charges require owner approval. |
+| Changes | Platform Git owns teams/guardrails; policy operator owns assignments/expiry; team users never inherit bootstrap rights. |
+| Exit and re-entry | Attributed authorization/PSA/quota denials and coverage evidence; remove incident probes and expired exceptions without weakening guardrails. |
+
+Use the [session, evidence and cost operating contract](../docs/operations.md) and [stage map](../docs/state.md). Times are planning estimates, not measured results.
+
+Optional after lab 13 or this governance lab: [artifact trust](../workshops/artifact-trust.md) distinguishes image digests, signatures/attestations and admission ownership without making optional enforcement a new cumulative prerequisite.
 
 This lab is cumulative after labs 10–15. Use synthetic data. Namespace tenancy is appropriate for cooperating internal teams, **not a hard boundary for hostile tenants**. Defender pricing is subscription-scoped and incurs charges. Do not enable it in a shared subscription without the subscription owner's approval.
 
-The operator works inside lab 10's native Bastion subshell. Separate human team sessions use the same Bastion host with their own Entra credentials and scoped access; the tunnel supplies connectivity, not namespace privileges.
+The operator uses the verified current-shell Bastion session; if disconnected, use `source ./scripts/activate-aks-bastion.sh`. Separate human team sessions below deliberately use their own foreground tunnels, Entra credentials and scoped access; never share the platform operator's credential cache or kubeconfig to prove team permissions.
 
 ## 1. Establish the operator and GitOps boundaries
 
-All Git changes retain lab 13's protected `main` workflow. Stage only the indicated files, then use `advanced/publish-reviewed-change.sh`: it creates a branch/PR and waits for your normal review and merge before returning to updated `main`. It never approves or merges its own PR. If you stop the helper with a pending PR, finish that review and return to updated `main` before continuing or reconciling.
+All Git changes use the [reviewed-change contract](../docs/operations.md#reviewed-git-changes) demonstrated in lab 13. Stage only the indicated files, then use `ops/publish-reviewed-change.sh`; it never approves/merges its own PR. Finish any pending review and return to updated `main` before reconciling.
 
 Run Bash from the repository root on the VNet-connected Linux management host with Azure CLI, kubectl, kubelogin, Flux CLI, Git, GitHub CLI, `jq`, and `python3`. Use `set -euo pipefail` in every terminal; the solutions share one session unless explicitly separated. You need AKS Azure RBAC Cluster Admin for platform onboarding, Contributor on AKS, Resource Policy Contributor for assignments/exemptions, and permission to assign Azure roles. Team users do not need these privileges. Expected denials are captured and checked explicitly without globally disabling failure handling.
 
@@ -73,7 +88,7 @@ path.write_text(text)
 PY
 kubectl kustomize ./advanced/governance
 git add ./advanced/governance
-bash ./advanced/publish-reviewed-change.sh --message "Onboard isolated internal teams"
+bash ./ops/publish-reviewed-change.sh --message "Onboard isolated internal teams"
 flux create kustomization teams --namespace "$FluxNamespace" --source "GitRepository/$GitSource" --path ./advanced/governance --prune --interval 1m
 flux reconcile kustomization teams --namespace "$FluxNamespace" --with-source
 kubectl get ns team-a team-b --show-labels
@@ -98,7 +113,7 @@ if not re.search(r"(?m)^  - teams[.]yaml[ \t]*$", text):
 PY
 kubectl kustomize ./gitops/clusters/primary
 git add ./gitops/clusters/primary/teams.yaml ./gitops/clusters/primary/kustomization.yaml
-bash ./advanced/publish-reviewed-change.sh --message "Persist platform-owned team reconciliation"
+bash ./ops/publish-reviewed-change.sh --message "Persist platform-owned team reconciliation"
 flux reconcile kustomization flux-system -n "$FluxNamespace" --with-source
 ```
 

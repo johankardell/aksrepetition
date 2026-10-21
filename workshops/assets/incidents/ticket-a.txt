@@ -1,0 +1,65 @@
+SYNTHETIC TRAINING EVIDENCE — ticket A — not a real incident or measured result.
+UTC event timestamps unless a collection timestamp is explicitly shown.
+All observations are independent of other ticket bundles.
+Source labels describe hypothetical commands; DO NOT execute them for this exercise.
+
+[A1] Collected 2026-04-08T09:16:00Z — synthetic client, private gateway HTTPS /healthz
+09:08:00..09:10:00  requests=120 successes=120
+09:13:00..09:15:00  requests=120 successes=114 connection_reset=4 http_503=2
+No TLS certificate validation errors. Request rate remained one per second.
+The client checks health only; this is not an order-completion measurement.
+
+[A2] Collected 09:16:03 — kubectl get pods -n orders -l app=order-api
+NAME                         READY STATUS  RESTARTS AGE
+order-api-7f66c8dd5d-a2k8n     1/1   Running 3        5m
+order-api-7f66c8dd5d-n5m3q     1/1   Running 2        5m
+
+[A3] Collected 09:16:05 — selected fields from one pod's JSON
+metadata:
+  name: order-api-7f66c8dd5d-a2k8n
+  namespace: orders
+spec:
+  nodeName: aks-apps-000002
+  containers:
+  - name: api
+    resources:
+      requests: {cpu: 100m, memory: 64Mi}
+      limits: {cpu: 500m, memory: 96Mi}
+status:
+  phase: Running
+  containerStatuses:
+  - name: api
+    ready: true
+    restartCount: 3
+    lastState:
+      terminated:
+        reason: OOMKilled
+        exitCode: 137
+        startedAt: 2026-04-08T09:13:11Z
+        finishedAt: 2026-04-08T09:14:55Z
+    state:
+      running:
+        startedAt: 2026-04-08T09:15:10Z
+
+[A4] Collected 09:16:08 — node status/events and pod events
+aks-apps-000002 Ready=True MemoryPressure=False DiskPressure=False PIDPressure=False
+09:14:55 Warning BackOff order-api-7f66c8dd5d-a2k8n Back-off restarting failed container api
+09:15:10 Normal  Started order-api-7f66c8dd5d-a2k8n Started container api
+No pod-level status.reason=Evicted in this collected namespace sample.
+No node-pressure events in the supplied 09:00..09:16 node-event window.
+Historical node metrics are not supplied; absence here does not prove pressure never existed.
+
+[A5] Reviewed source diff and rollout record (synthetic)
+09:10:00 revision 92ac001 applied by namespace-scoped Flux orders reconciler.
+deployment/order-api image digest unchanged.
+Resource patch:
+  requests.memory: 128Mi -> 64Mi
+  limits.memory:   256Mi -> 96Mi
+09:11:00 deployment generation observed; availableReplicas=2.
+Process working-set samples on the prior revision at this load: 108Mi, 116Mi, 112Mi.
+These sparse samples do not establish a leak or a safe production limit.
+
+[A6] Collected 09:16:12 — previous container log, tail
+09:13:11 INFO API initialization complete
+09:14:54 INFO GET /healthz 200
+<log ends; no Python traceback in this retained tail>

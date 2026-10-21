@@ -4,6 +4,19 @@
 
 **Outcome:** verified private API access through native Bastion, a usable private build host, and an identity/traffic map that separates management from Azure data access.
 
+## Lab contract
+
+| Field | This lab |
+|---|---|
+| Entry | Lab 2 successful foundation and original workstation keys. |
+| Host and identity | Workstation opens Bastion SSH; build VM uses the human's Entra login and user kubeconfig, never VM identity or admin credentials. |
+| Time | Estimate: 45–75 minutes active plus 5–20 minutes extension/authentication or role-propagation wait. |
+| Cost | No added Azure resources; all foundation charges continue while tunnels are closed. |
+| Changes | Operator owns checkout transfer and current-shell API session; private keys remain on the workstation. |
+| Exit and re-entry | Verified TLS, authorized API request and reconnect proof; recreate a closed session, do not reuse its expired kubeconfig. |
+
+Use the [session, evidence and cost operating contract](../docs/operations.md) and [stage map](../docs/state.md), including the [reviewed tooling/support boundary](../docs/operations.md#tooling-and-support). Times are estimates.
+
 ## Prerequisites and resource boundary
 
 Complete [lab 2](02-provision-aks.md). Reuse its Bastion, VM and identities; no additional Azure resources are needed. Their standing charges continue. You need Bastion resource access, user credential access to AKS and the configured Entra group's Kubernetes authorization. A VM login does not grant Azure roles.
@@ -53,7 +66,7 @@ az extension add --name bastion --version 1.4.3 --upgrade
 bash ./scripts/connect-build-vm.sh
 ```
 
-Follow [README private build VM](../README.md#private-build-vm) through the clone, host-key verification, Bastion transfer tunnel and `scp` recipe, then close the transfer tunnel. Stop before its final Azure login/API activation block: the steps below perform login, and task 3 owns activation. Transfer the existing `local.settings.json` and **public** `aks.pub`/`build-vm.pub` files; keep both private keys on the original workstation. Do not create a new configuration just because you changed hosts.
+Follow the [private build VM guide](../docs/operations.md#private-build-vm) through the clone, host-key verification, Bastion transfer tunnel and `scp` recipe, then close the transfer tunnel. Stop before its final Azure login/API activation block: the steps below perform login, and task 3 owns activation. Transfer the existing `local.settings.json` and **public** `aks.pub`/`build-vm.pub` files; keep both private keys on the original workstation. Do not create a new configuration just because you changed hosts.
 
 The VM has no public IP or broad managed-identity privileges. `labbuilder` is a Linux user, not an Azure service principal. The readiness extension has installed the tools; verify the version record:
 
@@ -154,7 +167,7 @@ source ./scripts/activate-aks-bastion.sh
 kubectl --request-timeout=30s get nodes
 ```
 
-Repeat task 3's TLS/context checks after reconnecting. A second terminal on the same host may export the owner's exact current temporary `KUBECONFIG`, as in [README shared sessions](../README.md#bastion-sessions-and-data-plane-access). That file is unusable after disconnect; do not copy it to another host.
+Repeat task 3's TLS/context checks after reconnecting. A second terminal on the same host may export the owner's exact current temporary `KUBECONFIG`, as in the [shared-session contract](../docs/operations.md#bastion-sessions-and-data-plane-access). That file is unusable after disconnect; do not copy it to another host.
 
 </details>
 
@@ -180,7 +193,7 @@ No. The tunnel serves the Kubernetes API only. Registry publishing requires its 
 
 ## Cleanup and next step
 
-Continue to [lab 4](04-node-pools-and-capacity.md) in the active VM shell, or disconnect explicitly when pausing. Close the separate transfer tunnel when its work is finished. Leave Azure resources intact; sessions ending do not stop billing. Use [beginner-only teardown](../README.md#beginner-only-teardown) only when permanently abandoning this environment.
+Continue to [lab 4](04-node-pools-and-capacity.md) in the active VM shell, or disconnect explicitly when pausing. Close the separate transfer tunnel when its work is finished. Leave Azure resources intact; sessions ending do not stop billing. Use [beginner-only teardown](../docs/operations.md#beginner-only-teardown) only when permanently abandoning this environment.
 
 ## References
 

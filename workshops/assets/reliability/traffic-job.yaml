@@ -1,0 +1,56 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: traffic
+  namespace: workload-reliability
+spec:
+  backoffLimit: 0
+  activeDeadlineSeconds: 150
+  template:
+    metadata:
+      labels:
+        app: traffic
+    spec:
+      restartPolicy: Never
+      automountServiceAccountToken: false
+      nodeSelector:
+        kubernetes.azure.com/agentpool: apps
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        runAsGroup: 10001
+        fsGroup: 10001
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: traffic
+          image: __WORKSHOP_IMAGE__
+          imagePullPolicy: IfNotPresent
+          command: ["python", "-B", "/work/traffic.py"]
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          resources:
+            requests:
+              cpu: 50m
+              memory: 32Mi
+              ephemeral-storage: 16Mi
+            limits:
+              cpu: 100m
+              memory: 64Mi
+              ephemeral-storage: 32Mi
+          volumeMounts:
+            - name: code
+              mountPath: /work
+              readOnly: true
+            - name: scratch
+              mountPath: /scratch
+      volumes:
+        - name: code
+          configMap:
+            name: diagnostic-code
+        - name: scratch
+          emptyDir:
+            sizeLimit: 8Mi

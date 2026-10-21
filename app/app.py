@@ -10,7 +10,7 @@ import psycopg
 import uvicorn
 from azure.identity import DefaultAzureCredential
 from azure.servicebus import ServiceBusClient, ServiceBusMessage, TransportType
-from fastapi import FastAPI, HTTPException, Request
+from fastapi import Depends, FastAPI, HTTPException, Request
 from fastapi.responses import HTMLResponse, Response
 from opentelemetry import propagate, trace
 from prometheus_client import CONTENT_TYPE_LATEST, Counter, Histogram, generate_latest
@@ -23,7 +23,27 @@ if os.getenv("APPLICATIONINSIGHTS_CONNECTION_STRING"):
 
     configure_azure_monitor()
 
-api = FastAPI(title="AKS enterprise orders lab")
+def api_authorization():
+    # Workers keep their existing Workload ID path and never initialize API auth.
+    if os.getenv("ROLE", "api") == "worker":
+        return None
+    enabled = os.getenv("AUTH_ENABLED", "false")
+    if enabled not in ("true", "false"):
+        raise ValueError("AUTH_ENABLED must be true or false")
+    if enabled == "false":
+        return None
+    from authentication import EntraAuthorization
+
+    return EntraAuthorization(os.environ)
+
+
+authorization = api_authorization()
+api = FastAPI(
+    title="AKS enterprise orders lab",
+    docs_url=None if authorization else "/docs",
+    redoc_url=None if authorization else "/redoc",
+    openapi_url=None if authorization else "/openapi.json",
+)
 tracer = trace.get_tracer("orders")
 requests = Counter("orders_http_requests_total", "HTTP requests", ["method", "status"])
 latency = Histogram("orders_http_duration_seconds", "HTTP latency")
@@ -34,6 +54,16 @@ stopping = threading.Event()
 class Order(BaseModel):
     id: str = Field(min_length=1, max_length=80, pattern=r"^[a-zA-Z0-9_-]+$")
     item: str = Field(min_length=1, max_length=200)
+
+
+def require_read(request: Request):
+    if authorization is not None:
+        authorization.require(request.headers.get("Authorization"), "read")
+
+
+def require_write(request: Request):
+    if authorization is not None:
+        authorization.require(request.headers.get("Authorization"), "write")
 
 
 def bus_client():
@@ -95,8 +125,12 @@ async def observe(request: Request, call_next):
             latency.observe(time.monotonic() - start)
 
 
-@api.get("/", response_class=HTMLResponse)
+@api.get("/", response_class=HTMLResponse, dependencies=[Depends(require_read)])
 def home():
+    if authorization is not None:
+        return """<!doctype html><html lang="en"><meta charset="utf-8">
+        <title>Enterprise orders API</title><h1>Enterprise orders API</h1>
+        <p>Tenant access tokens and orders permissions are required. API explorer disabled.</p></html>"""
     return """<!doctype html><html lang="en"><meta charset="utf-8">
     <title>Enterprise orders API</title><h1>Enterprise orders API</h1>
     <p>Use <a href="/docs">the API explorer</a> to submit synthetic orders.</p>
@@ -120,7 +154,7 @@ def metrics():
     return Response(generate_latest(), media_type=CONTENT_TYPE_LATEST)
 
 
-@api.get("/config-version")
+@api.get("/config-version", dependencies=[Depends(require_read)])
 def config_version():
     path = Path(os.getenv("CONFIG_FILE", "/mnt/secrets-store/lab-version"))
     if not path.is_file():
@@ -129,7 +163,7 @@ def config_version():
     return {"lab_version": path.read_text().strip()}
 
 
-@api.post("/orders", status_code=202)
+@api.post("/orders", status_code=202, dependencies=[Depends(require_write)])
 def submit(order: Order):
     with tracer.start_as_current_span("orders.enqueue"):
         carrier = {}
@@ -144,7 +178,7 @@ def submit(order: Order):
     return {"id": order.id, "status": "accepted", "processed": False}
 
 
-@api.get("/orders/{order_id}")
+@api.get("/orders/{order_id}", dependencies=[Depends(require_read)])
 def get_order(order_id: str):
     if not os.getenv("POSTGRES_HOST"):
         raise HTTPException(503, "Durable order lookup is enabled in lab 21")

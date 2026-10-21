@@ -4,19 +4,42 @@
 
 **Scenario.** Pods are Running, but customers report slow orders. Build evidence that separates HTTP acceptance, asynchronous completion, platform health and monitoring failure.
 
+## Lab contract
+
+| Field | This lab |
+|---|---|
+| Entry | Lab 13 Ready GitOps, lab 12 ordinary HTTPS trust, approved authenticated public telemetry endpoints. |
+| Host and identity | Private management/consumer host; sourced Bastion for API, platform deployment operator and scoped observer/Grafana roles. |
+| Time | Estimate: 2–3 hours active plus 30–90 minutes provisioning, ingestion and bounded alert windows. |
+| Cost | Adds Monitor workspace, Grafana Standard, Application Insights, alerts and ingestion/retention; charges continue without traffic. |
+| Changes | Platform owns destinations/Secret/agent settings; app telemetry/sampling changes go through reviewed Git. |
+| Exit and re-entry | Correlated order, measured user SLIs and actual alert history; reload monitoring outputs, remove live fault overrides and reconcile before resuming measurements. |
+
+Use the [session, evidence and cost operating contract](../docs/operations.md) and [stage map](../docs/state.md). Times are planning estimates, not measured results.
+
+All application-source changes use the [reviewed Git changes contract](../docs/operations.md#reviewed-git-changes) already demonstrated in lab 13. The helper waits for review/merge; inspect and stage only the named files on updated `main`.
+
 **Prerequisites/re-entry.** Complete Lab 13 with `orders` and `orders-test` Flux Kustomizations Ready. Run Bash at the repository root on a Linux host with private management connectivity. Use `set -euo pipefail` in each terminal. Install Azure CLI, kubectl, kubelogin, Flux CLI, Git, GitHub CLI, `jq`, `curl` (supporting `--fail-with-body`), `python3`, and `openssl`. Re-read local configuration and the monitoring deployment outputs when returning. The platform operator needs AKS configuration/diagnostic permissions and role-assignment rights; the observer needs Monitoring Reader, Log Analytics Reader and Grafana Viewer at their respective resources. Deploying a Grafana resource does not by itself give dashboard access.
 
 Solutions continue in the same Bash terminal unless stated otherwise. `source ./scripts/use-lab.sh` sets `Lab` and `Outputs` to JSON strings and `Root` to the absolute repository root; `lab_value KEY` and `output_value KEY` read required values with `jq -er`. On re-entry, also reload `Monitor` with the deployment-output command in directive 2. Do not enable shell tracing (`set -x`) while handling telemetry connection strings or tokens.
 
 For a Lab 12 private CA, set both `SSL_CERT_FILE` and `CURL_CA_BUNDLE` to the same absolute approved CA-bundle path in every management/consumer terminal. This preserves certificate verification for the Python helpers and direct `curl` commands without modifying system trust. Never use `curl --insecure` to bypass trust failures.
 
-Keep lab 10's native Bastion subshell alive for Kubernetes/Flux operations. Every second terminal doing a port-forward or exec shares its exact active temporary `KUBECONFIG` on the same host. The real HTTPS load path still needs the private data-plane host/routing; API tunneling alone does not reach the private gateway.
+Keep the verified current-shell native Bastion session alive for Kubernetes/Flux operations; reconnect with `source ./scripts/activate-aks-bastion.sh` only if disconnected. Every second terminal doing a port-forward or exec shares its exact active temporary `KUBECONFIG` on the same host. The real HTTPS load path still needs the private data-plane host/routing; API tunneling alone does not reach the private gateway.
 
 **Paths and scope.** API `/metrics` → managed `ama-metrics` agent → **Azure Monitor workspace** (Prometheus); container stdout/stderr + selected control-plane diagnostics → existing **Log Analytics workspace**; application Azure Monitor OpenTelemetry distro → workspace-based **Application Insights**; Grafana queries Prometheus using its own managed identity. An Azure Monitor workspace is **not** a Log Analytics workspace. The worker is not an HTTP metrics server; observe its processing through logs/traces and Service Bus metrics, not a nonexistent worker `/metrics`.
 
 **Resource inventory and cost warning.** Add Azure Monitor workspace, **Managed Grafana Standard** (billable continuously), Application Insights, action group and Prometheus alert rules. Reuse the existing logs workspace and monitoring add-on. Prometheus samples/query volume, logs/trace ingestion, retention, alert evaluation and emails can incur cost. The small lab uses authenticated **public telemetry/query endpoints over TLS with Firewall allowlisting**, not AMPLS or private Grafana. This does **not** expose the AKS API or ACR. A policy requiring private-only observability needs the documented AMPLS/DCE and Grafana private-endpoint design first; do not silently open otherwise-prohibited public telemetry.
 
 **Lab SLO contract.** For the synthetic exercise: ≥99% successful user-path HTTP responses and p95 ≤1 second over a measured five-minute interval; orders accepted for processing should complete within 60 seconds at baseline load. These are lab objectives, not Microsoft's AKS SLA or a claimed production 30-day SLO. Admission 202 is not completion. Define production SLIs, exclusions and a longer window with the business before setting alerts.
+
+## Resumable Parts and checkpoints
+
+| Part | Sections | Required checkpoint evidence | Resume/recovery gate |
+|---|---|---|---|
+| Part A — Destinations and instrumentation | [1](#1-verify-providers-diagnostics-and-network-prerequisites)–[3](#3-wire-real-application-telemetry-and-scraping-through-gitops) | Approved endpoints, `Monitor` outputs, scoped readers, Ready agents/PodMonitor and reviewed instrumentation SHA. | Reload outputs and trust; inspect existing resources/Secret without printing it. Do not duplicate onboarding or instrumentation. |
+| Part B — End-to-end baseline | [4](#4-follow-one-synthetic-order-end-to-end)–[5](#5-compare-user-slis-with-prometheus-and-create-a-useful-alert-evidence-trail) | Matching trace/order IDs, local/external five-minute windows, query time range and measured SLIs. | Restart local port-forward if needed; repeat measurements only with fresh IDs/windows and retain previous evidence. |
+| Part C — Incidents and collection cost | [6](#6-inject-cpu-pressure-and-distinguish-saturation-from-dependency-latency)–[9](#9-reduce-collection-volume-deliberately-and-hand-over) | Attributed CPU/probe/dependency symptoms, actual alert/email and resolution, recovered HTTPS, sampling/ingestion comparison. | Remove injected `QUEUE_NAME`/alternate `FAIL_READINESS`, resume/reconcile `orders`, verify correct probe and rollouts; do not pause with a fault or claim missing alerts passed. |
 
 ## Numbered directives
 
@@ -108,18 +131,13 @@ Application Insights connection strings identify an ingestion resource; they are
 bash ./ops/add-gitops-file.sh --source ./ops/monitoring/podmonitor.yaml
 bash ./ops/add-gitops-file.sh --source ./ops/monitoring/telemetry-patch.yaml --kind Patch
 kubectl kustomize ./gitops/clusters/primary/apps/orders
-git switch -c enable-orders-telemetry
-git add gitops
-git commit -m "Scrape orders and enable correlated application telemetry"
-git push -u origin HEAD
-gh pr create --base main --fill
+git add ./gitops/clusters/primary/apps/orders
+bash ./ops/publish-reviewed-change.sh --message "Scrape orders and enable correlated application telemetry"
 ```
 
-After review/merge:
+After the helper confirms review/merge:
 
 ```bash
-git switch main
-git pull --ff-only
 flux reconcile kustomization orders --with-source
 kubectl -n orders rollout status deployment/order-api --timeout=300s
 kubectl -n orders rollout status deployment/order-worker --timeout=300s
@@ -395,7 +413,6 @@ bash ./ops/invoke-logs-query.sh --query "$Query" --timespan P1D
 For ongoing operation change **both** `OTEL_TRACES_SAMPLER_ARG` values in the Git-owned `telemetry-patch.yaml` from `"1.0"` to `"0.1"` through a PR, merge and reconcile. Keep 100% while proving cross-service traces. Sampling is not applied to the Prometheus SLIs. Inspect `ItemCount` in Application Insights tables; don't infer actual sampling from manifest text alone. Never put order IDs, emails or raw URLs in metric labels; current labels have bounded method/status cardinality.
 
 ```bash
-git switch -c reduce-trace-sampling
 python3 - <<'PY'
 from pathlib import Path
 path = Path("gitops/clusters/primary/apps/orders/telemetry-patch.yaml")
@@ -405,13 +422,8 @@ if text.count('value: "1.0"') != 2:
 path.write_text(text.replace('value: "1.0"', 'value: "0.1"'))
 PY
 kubectl kustomize ./gitops/clusters/primary/apps/orders
-git add gitops
-git commit -m "Reduce trace sampling after diagnostic proof"
-git push -u origin HEAD
-gh pr create --base main --fill
-# After review/merge:
-git switch main
-git pull --ff-only
+git add ./gitops/clusters/primary/apps/orders/telemetry-patch.yaml
+bash ./ops/publish-reviewed-change.sh --message "Reduce trace sampling after diagnostic proof"
 flux reconcile kustomization orders --with-source
 ```
 
@@ -443,6 +455,25 @@ Wait for ingestion and narrow the time filter to after the sampling rollout when
 Retain Prometheus/Grafana/Logs/Application Insights for labs 15 and 20–23. Stop port-forwards with Ctrl+C. Final cleanup: remove the telemetry patch/PodMonitor through Git, reconcile, delete the `orders-telemetry` Secret, disable the metrics add-on with `az aks update -g "$(lab_value ResourceGroup)" -n "$(lab_value ClusterName)" --disable-azure-monitor-metrics`, and use root resource cleanup for telemetry resources. Do not delete the shared Log Analytics workspace mid-course. Workspace retention and Grafana billing remain even when AKS is stopped; daily ingestion caps/budget emails are not guaranteed spending caps.
 
 </details>
+
+## Optional private-observability design exercise — not executed
+
+**Deliverable:** a reviewed one-page data-flow diagram and decision table for a private-only variant of this lab. This is an **offline design exercise, not a live deployment recipe**. Do not change public network access, deploy undocumented endpoints, or replace the working telemetry stack here. Mark every proposed resource and connectivity test **not executed** until a separately approved implementation proves it.
+
+Use the actual resource IDs and regional support discovered in Part A, but omit credentials and connection strings:
+
+| Path to design | Required decision/evidence in the deliverable |
+|---|---|
+| Container logs and Application Insights ingestion/query | Identify the Log Analytics/Application Insights resources in an Azure Monitor Private Link Scope (AMPLS), required DNS zones, private endpoints, access modes and ownership. Distinguish query clients from ingestion agents. |
+| Managed Prometheus ingestion/query | Identify workspace, DCR/DCE associations and the currently supported private-link path for each endpoint. Do not assume an AMPLS membership alone privatizes every Prometheus endpoint. |
+| Grafana browser and data-source access | Separate private browser ingress from Grafana-to-data-source connectivity/managed private endpoints. Record supported SKU/region, DNS and viewer/managed-identity roles. |
+| Human and incident access | Name the independently reachable private operator/consumer host and DNS resolver; the Kubernetes Bastion tunnel does not route Grafana or telemetry queries. |
+| Cutover and recovery | Specify pre-cutover positive ingestion/query tests and negative public-path checks, exact scope for reversible changes, rollback owner and evidence retention; avoid losing both monitoring and recovery access. |
+| Cost and support | Estimate endpoint/DNS/retention and Grafana costs separately from measured ingestion; record documentation date and unresolved regional/feature support gates. |
+
+Acceptance is a coherent supported design with no unexplained public fallback, not “private monitoring passed.” Consult [Azure Monitor Private Link](https://learn.microsoft.com/azure/azure-monitor/fundamentals/private-link-security), [managed Prometheus private link](https://learn.microsoft.com/azure/azure-monitor/metrics/azure-monitor-workspace-private-link), and [Grafana private endpoints](https://learn.microsoft.com/azure/managed-grafana/how-to-set-up-private-access). Recheck current service limitations before any future implementation; do not infer support from template schema alone.
+
+Optional after this lab: the [incident-response workshop](../workshops/incident-response.md) uses offline evidence tickets to practice chronology, diagnosis and handover without another live fault.
 
 ## Customer discovery and model answers
 

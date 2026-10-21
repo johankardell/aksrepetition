@@ -4,6 +4,19 @@
 
 **Outcome:** a Kustomize base, development and production overlays, a reusable production-safety component, generated configuration, image and replica transformations, targeted patches, replacements, and a repeatable offline verification workflow.
 
+## Lab contract
+
+| Field | This lab |
+|---|---|
+| Entry | Optional offline: Tier 1 recommended before lab 11; Tier 2 before lab 13; Tier 3 is advanced composition practice. |
+| Host and identity | Linux checkout with kubectl's Kustomize renderer; no Azure login, cluster access or deployment identity. |
+| Time | Estimate: Tier 1 30–45, Tier 2 45–60, Tier 3 45–60 minutes active; no Azure wait. |
+| Cost | No Azure resources; only local files and rendering. |
+| Changes | Learner owns disposable base/overlays/components; never apply these training manifests to cumulative namespaces. |
+| Exit and re-entry | Keep rendered diffs/checks per tier and working-tree path; resume that tree, not a new copy over completed work. |
+
+Use the [session, evidence and cost operating contract](../docs/operations.md) and [stage map](../docs/state.md). Kustomize **composes** manifests; lab 13 **delivers and reconciles** them. Times are estimates.
+
 This lab does not use or modify the cumulative labs 10-15 and 20-23 environment. It renders manifests locally and does not require an AKS cluster or Azure resources.
 
 ## Prerequisites and working folder

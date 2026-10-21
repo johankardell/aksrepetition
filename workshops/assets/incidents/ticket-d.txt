@@ -1,0 +1,53 @@
+SYNTHETIC TRAINING EVIDENCE — ticket D — not a real incident or measured result.
+UTC timestamps; independent incident. Commands are source labels, not instructions.
+
+[D1] Collected 2026-04-08T12:25:00Z — Grafana and managed Prometheus query record
+Dashboard custom API request-duration panel: No data.
+Grafana datasource request: HTTP 200 (not 401/403); selected time range 12:20..12:25 UTC.
+New samples for orders_http_requests_total in orders and orders-test stopped at 12:15.
+Authenticated query to the same Azure Monitor workspace:
+  count(orders_http_requests_total{namespace="orders"}) -> empty vector
+  up{job="kube-state-metrics"} -> 1
+Log Analytics ContainerLogV2 continues receiving API logs through 12:24.
+Prometheus workspace and Log Analytics workspace are separate destinations.
+
+[D2] Collected 12:25:03 — independent private user path
+Private application hostname resolves to its expected private gateway address.
+TLS chain and hostname verified using the approved lab CA bundle.
+12:23:00 GET https://orders.training.invalid/healthz -> 200
+12:23:01 POST https://orders.training.invalid/orders -> 202, synthetic order ticket-d-001
+12:23:04 retained worker log records ticket-d-001 completed
+No ingress timeout, 502/503 or TLS error in this sampled user path.
+This is a sample, not proof of uninterrupted availability.
+
+[D3] Collected 12:25:06 — selected deployed monitor and pod fields
+apiVersion: azmonitoring.coreos.com/v1
+kind: PodMonitor
+metadata:
+  name: order-api
+  namespace: orders
+spec:
+  selector:
+    matchLabels:
+      app: orders-api
+  podMetricsEndpoints:
+  - port: http
+    path: /metrics
+
+Actual API pod labels:
+  app: order-api
+Container port:
+  name: http
+  containerPort: 8080
+orders-test has the same selector/pod mismatch.
+No API pod matches app=orders-api in either namespace.
+Direct /metrics response sampled from an API pod: HTTP 200; orders_http_requests_total present.
+
+[D4] Collected 12:25:09 — agent and change record
+ama-metrics agent pods Running/Ready; no scrape-authentication error in retained agent tail.
+Synthetic discovery export: order-api PodMonitor -> zero selected targets.
+Policy permits the existing kube-system metrics-agent path; no policy edit in this change.
+12:14:00 reviewed telemetry-only Git commit b013004 changed both app overlay PodMonitor
+  selectors from app=order-api to app=orders-api.
+12:15:00 namespace-scoped Flux orders and orders-test reconcilers applied b013004.
+No application image, Service, gateway route, TLS, Grafana identity or workspace change.

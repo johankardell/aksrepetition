@@ -1,0 +1,52 @@
+SYNTHETIC TRAINING EVIDENCE — ticket B — not a real incident or measured result.
+UTC event timestamps; independent incident. Source labels are illustrative, not instructions.
+
+[B1] Collected 2026-04-08T10:13:00Z — rollout summary
+deployment/order-api namespace=orders desired=2 updated=1 total=3 available=2
+strategy: maxSurge=1 maxUnavailable=0
+Progressing=False reason=ProgressDeadlineExceeded
+old ReplicaSet order-api-64fc87b6bf: desired=2 ready=2
+new ReplicaSet order-api-7c99ddc7d8: desired=1 ready=0
+
+[B2] Collected 10:13:02 — new pod selected fields
+name: order-api-7c99ddc7d8-r7v2k
+phase: Pending
+nodeName: <unset>
+nodeSelector:
+  kubernetes.azure.com/agentpool: frontend
+conditions:
+- type: PodScheduled
+  status: "False"
+  reason: Unschedulable
+containerStatuses: <absent>
+events:
+10:01:05 Warning FailedScheduling
+  0/3 nodes are available: 3 node(s) didn't match Pod's node affinity/selector.
+  preemption: 0/3 nodes are available: 3 Preemption is not helpful for scheduling.
+10:12:05 Warning FailedScheduling <same reason>
+
+[B3] Collected 10:13:04 — relevant node inventory
+NAME              READY POOL   TAINTS                                MemoryPressure
+aks-system-000000  True  system CriticalAddonsOnly=true:NoSchedule     False
+aks-apps-000001    True  apps   <none>                                False
+aks-apps-000002    True  apps   <none>                                False
+POOL is the kubernetes.azure.com/agentpool label value.
+Approved apps nodes' unreserved allocatable (requests-based):
+  000001: cpu=1800m memory=3400Mi
+  000002: cpu=1600m memory=3200Mi
+Pending pod request: cpu=100m memory=128Mi
+Current utilization is not supplied. There is no Insufficient cpu/memory event in this bundle.
+
+[B4] Collected 10:13:06 — change and ownership
+09:59:00 reviewed source commit 1ab2002:
+  deployment/order-api template nodeSelector["kubernetes.azure.com/agentpool"]: apps -> frontend
+  image: same existing private ACR sha256 digest as old ReplicaSet
+10:01:00 Flux orders reconciler reports applied revision 1ab2002.
+Flux owns deployment/order-api, not the nodes.
+No HPA or KEDA object selects this API Deployment at this curriculum stage.
+
+[B5] Collected 10:13:10 — independent private HTTPS synthetic request path
+10:08:00..10:13:00 requests=300 responses_2xx=300 TLS_verified=true
+synthetic order ticket-b-001: accepted 10:10:00, worker completion log 10:10:03
+Old API pod names served these checks; no request was served by the new Pending pod.
+These bounded checks do not establish a production availability SLO.

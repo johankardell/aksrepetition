@@ -4,6 +4,19 @@
 
 **Outcome:** the supplied API and worker run on the application pool, with successful image pulls, rollout evidence and private management-local HTTP probes.
 
+## Lab contract
+
+| Field | This lab |
+|---|---|
+| Entry | Lab 4 capacity worksheet; first image/workload deployment, not an existing GitOps environment. |
+| Host and identity | Private build VM; human registry-scoped publisher and Kubernetes operator, separate from kubelet pull identity. |
+| Time | Estimate: 60–90 minutes active plus 10–30 minutes build, role propagation and rollout wait. |
+| Cost | Image storage/build traffic and logs; no added pools or Azure services. |
+| Changes | Operator renders the base once and owns it until GitOps adoption; publisher owns image/digest evidence. |
+| Exit and re-entry | Healthy two-API/one-worker rollout and local probes; retain accumulated rendered state and restart only the session/port-forward when needed. |
+
+Use the [session, evidence and cost operating contract](../docs/operations.md) and [stage map](../docs/state.md). Times are planning estimates, not measured results.
+
 ## Prerequisites and resource boundary
 
 Complete [lab 4](04-node-pools-and-capacity.md). Use the private build VM, Bash at the repository root, Podman and the active TLS-verified Bastion session from lab 3. Human publishing requires registry-scoped AcrPush; Kubernetes deployment uses the operator's existing permissions.
@@ -103,7 +116,7 @@ The worker has no HTTP readiness probe. Running/Ready status alone does not prov
 <details>
 <summary>Solution</summary>
 
-Open a second Bash terminal on the **same VM**. Copy the active owner's exact temporary kubeconfig path using the [README shared-session recipe](../README.md#bastion-sessions-and-data-plane-access), verify context, then run:
+Open a second Bash terminal on the **same VM**. Copy the active owner's exact temporary kubeconfig path using the [shared-session recipe](../docs/operations.md#bastion-sessions-and-data-plane-access), verify context, then run:
 
 ```bash
 kubectl config current-context
@@ -121,7 +134,7 @@ kubectl logs -n orders deployment/order-worker --tail=30
 
 Both probes must succeed. Local HTTP inside the port-forward is not proof of real ingress/TLS, Azure dependency health or successful order processing. It uses the Kubernetes management connection; lab 12 later adds ordinary private HTTPS routing. Leave order submission for lab 11. Durable `GET /orders/{id}` is unavailable until lab 21.
 
-For a workstation browser, use the README's explicit Bastion SSH local-forward recipe; do not expose port 8080 on the VM.
+For a workstation browser, use the [explicit Bastion SSH local-forward recipe](../docs/operations.md#private-build-vm); do not expose port 8080 on the VM.
 
 </details>
 
@@ -155,6 +168,8 @@ Do not patch arbitrary roles, disable TLS or open private endpoints to make a ge
 ## Exit evidence
 
 Record registry/image/digest, human-versus-kubelet roles, completed rollouts, live pool/zone placements, successful probes and retained rendered state. Record what these checks do **not** prove about business completion.
+
+Optional: the [workload reliability workshop](../workshops/workload-reliability.md) extends probes, requests and disruption reasoning in an isolated namespace after this lab (or after lab 13). It is not a new cumulative prerequisite and must not mutate `orders`.
 
 ## Customer conversation
 

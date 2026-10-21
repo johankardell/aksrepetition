@@ -10,7 +10,12 @@ from urllib.parse import unquote, urlsplit
 
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
-GUIDES = [ROOT / "README.md", ROOT / ".github/copilot-instructions.md", *sorted((ROOT / "labs").glob("*.md"))]
+GUIDES = [
+    ROOT / "README.md", ROOT / "CONTRIBUTING.md", ROOT / ".github/copilot-instructions.md",
+    *sorted((ROOT / "labs").glob("*.md")),
+    *sorted((ROOT / "docs").glob("*.md")),
+    *sorted((ROOT / "workshops").rglob("*.md")),
+]
 
 
 class LabCommandsTests(unittest.TestCase):
@@ -39,6 +44,17 @@ class LabCommandsTests(unittest.TestCase):
                         anchors = [re.sub(r"[^\w -]", "", heading.lower()).replace(" ", "-")
                                    for heading in headings]
                         self.assertIn(unquote(url.fragment), anchors)
+
+    def test_lab_contracts_are_visible_and_specific(self):
+        for guide in sorted((ROOT / "labs").glob("*.md")):
+            text = guide.read_text()
+            with self.subTest(guide=guide.name):
+                self.assertIn("## Lab contract", text)
+                contract = text.split("## Lab contract", 1)[1].split("\n## ", 1)[0]
+                self.assertNotIn("<details>", contract)
+                for field in ("Entry", "Host and identity", "Time", "Cost", "Changes", "Exit and re-entry"):
+                    self.assertRegex(contract, rf"\| \*?\*?{re.escape(field)}\*?\*? \| .+\|")
+                self.assertIn("../docs/state.md", text)
 
     def test_every_lab_ends_with_next_lab_navigation(self):
         guides = sorted((ROOT / "labs").glob("*.md"))
@@ -110,6 +126,34 @@ class LabCommandsTests(unittest.TestCase):
             for block in re.findall(r"<<'PY'[^\n]*\n(.*?)^PY$", guide.read_text(), re.M | re.S):
                 with self.subTest(guide=guide.relative_to(ROOT)):
                     compile(block, str(guide), "exec")
+
+    def test_offline_lifecycle_rehearsal_detects_replayed_network_state(self):
+        guide = "workshops/infrastructure-lifecycle.md"
+        script = self.bash_block(guide, "cat > .artifacts/lifecycle/bootstrap.json")
+        script += "\n" + self.bash_block(guide, "cat > .artifacts/lifecycle/desired.json")
+        with tempfile.TemporaryDirectory() as directory:
+            result = subprocess.run(["bash", "-c", script], cwd=directory,
+                                    text=True, capture_output=True)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertIn('-  "outboundType": "loadBalancer"', result.stdout)
+            self.assertIn('+  "outboundType": "userDefinedRouting"', result.stdout)
+
+    @unittest.skipUnless(shutil.which("openssl"), "OpenSSL is required")
+    def test_offline_artifact_rehearsal_accepts_and_rejects_evidence(self):
+        guide = "workshops/artifact-trust.md"
+        script = "\n".join(self.bash_block(guide, marker) for marker in (
+            "openssl genpkey", "from datetime import datetime", "sbom.saved",
+            "rm -- .artifacts/trust/signer.key",
+        ))
+        with tempfile.TemporaryDirectory() as directory:
+            root = pathlib.Path(directory)
+            (root / "ops").symlink_to(ROOT / "ops", target_is_directory=True)
+            (root / "tests").symlink_to(ROOT / "tests", target_is_directory=True)
+            result = subprocess.run(["bash", "-c", script], cwd=directory,
+                                    text=True, capture_output=True)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertIn('"allowed": true', result.stdout)
+            self.assertFalse((root / ".artifacts/trust/signer.key").exists())
 
     def test_cumulative_guides_preserve_active_bastion_kubeconfigs(self):
         cumulative_numbers = {*range(1, 7), *range(10, 16), *range(20, 25), 28}
@@ -452,13 +496,25 @@ with pathlib.Path("calls.jsonl").open("a") as file:
                         compile(block, str(path), "exec")
 
     def test_workflow_bash_steps_parse_without_execution(self):
-        workflow = (ROOT / ".github/workflows/publish-image.yml").read_text()
-        blocks = re.findall(r"^        run: \|\n((?:^          .*\n|^\n)*)", workflow, re.M)
-        self.assertGreaterEqual(len(blocks), 2)
-        for block in blocks:
-            script = "\n".join(line[10:] for line in block.splitlines())
-            result = subprocess.run(["bash", "-n"], input=script, text=True, capture_output=True)
-            self.assertEqual(result.returncode, 0, result.stderr)
+        for path in (ROOT / ".github/workflows").glob("*.yml"):
+            workflow = path.read_text()
+            blocks = re.findall(r"^        run: \|\n((?:^          .*\n|^\n)*)", workflow, re.M)
+            self.assertGreaterEqual(len(blocks), 1, str(path))
+            for block in blocks:
+                script = "\n".join(line[10:] for line in block.splitlines())
+                result = subprocess.run(["bash", "-n"], input=script, text=True, capture_output=True)
+                self.assertEqual(result.returncode, 0, f"{path}: {result.stderr}")
+
+    def test_pr_validation_is_separate_from_private_publishing(self):
+        validation = (ROOT / ".github/workflows/validate.yml").read_text()
+        for forbidden in ("pull_request_target", "self-hosted", "id-token:", "azure/login@", "${{ secrets."):
+            self.assertNotIn(forbidden, validation)
+        self.assertIn("pull_request:", validation)
+        self.assertIn("contents: read", validation)
+        self.assertIn("python -m unittest discover -s tests -v", validation)
+        publishing = (ROOT / ".github/workflows/publish-image.yml").read_text()
+        self.assertIn("runs-on: [self-hosted, Linux, X64, aks-private]", publishing)
+        self.assertNotIn("pull_request:", publishing)
 
 
 if __name__ == "__main__":

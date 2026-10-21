@@ -4,11 +4,24 @@
 
 **Outcome:** one verified foundation, with private AKS, separate node pools, managed identities and the management infrastructure needed by subsequent labs.
 
+## Lab contract
+
+| Field | This lab |
+|---|---|
+| Entry | Lab 1 go/no-go approved; initial bootstrap only. |
+| Host and identity | Original workstation; authorized infrastructure/role-assignment operator with existing settings and public keys. |
+| Time | Estimate: 45–60 minutes active plus 30–90 minutes Azure provisioning wait. |
+| Cost | Starts six nodes, private build VM, Bastion, Firewall, Premium dependencies and logs; approve the complete inventory. |
+| Changes | Infrastructure operator owns initial foundation and its deployment record; AKS owns the managed node group. |
+| Exit and re-entry | Require successful deployment and inventory. Diagnose exact failed operations before an initial retry; never replay over a progressed stage. |
+
+Use the [session, evidence and cost operating contract](../docs/operations.md) and [stage map](../docs/state.md). Times are planning estimates, not measured results.
+
 ## Prerequisites and resource boundary
 
 Complete [lab 1](01-aks-readiness.md). Run from the repository root on the original Linux bootstrap workstation in Bash with Azure CLI/Bicep, `jq` and the local settings/key pairs. The operator needs deployment and role-assignment authority.
 
-**Billable:** this is where the entire [foundation cost inventory](../README.md#before-spending-anything) starts. Six nodes, Bastion, Firewall, the build VM and Premium dependencies are created together. Do not apply until approved. There is no smaller beginner template.
+**Billable:** this is where the entire [foundation cost inventory](../docs/operations.md#before-spending-anything) starts. Six nodes, Bastion, Firewall, the build VM and Premium dependencies are created together. Do not apply until approved. There is no smaller beginner template.
 
 This lab is for the **first** foundation deployment. If it already succeeded, use the inspection tasks only. If later labs have changed the environment, return to their re-entry guidance; never rerun initial foundation to repair a progressed cluster.
 
@@ -149,7 +162,7 @@ No. It proves Azure completed resource provisioning. Authenticated API access, i
 
 ## Cleanup and next step
 
-Keep the foundation for [lab 3](03-access-and-identity.md). Do not delete nodes, identities or either resource group between exercises. Charges continue while you pause. If ending permanently at this stage, use the [README beginner-only teardown](../README.md#beginner-only-teardown), not later database/Fleet cleanup for resources you have not created.
+Keep the foundation for [lab 3](03-access-and-identity.md). Do not delete nodes, identities or either resource group between exercises. Charges continue while you pause. If ending permanently at this stage, use the [beginner-only teardown](../docs/operations.md#beginner-only-teardown), not later database/Fleet cleanup for resources you have not created.
 
 ## References
 

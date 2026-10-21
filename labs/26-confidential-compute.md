@@ -4,13 +4,28 @@
 
 **Outcome:** one AKS cluster with ordinary and AMD SEV-SNP Confidential VM (CVM) user pools, a mixed workload, and evidence that scheduling controls deliberately steer sensitive pods to CVMs and ordinary pods away from them. The lab separates a node-pool trust boundary from confidential containers and shows how to scale confidential capacity down when it is not required.
 
+## Lab contract
+
+| Field | This lab |
+|---|---|
+| Entry | Optional standalone exercise with supported AMD CVM SKU/quota; no cumulative deployment required. |
+| Host and identity | Separate Linux session and isolated kubeconfig; scoped AKS/pool operator. Shown create command uses a public API, not cumulative Bastion. |
+| Time | Estimate: 60–120 minutes active plus 30–90 minutes provisioning/scaling waits; four-hour allocation deadline. |
+| Cost | Two system, one ordinary and at most one CVM node, disks/traffic; zero CVM nodes does not eliminate the other charges. |
+| Changes | Operator owns isolated pools and synthetic workload; CVM is a VM-level boundary, not demonstrated per-pod attestation. |
+| Exit and re-entry | SKU/image plus placement/denial evidence, CVM contraction and dedicated cleanup; reload saved context, never reuse cumulative kubeconfig. |
+
+Use the [session, evidence and cost operating contract](../docs/operations.md), [stage map](../docs/state.md) and [tooling/support baseline](../docs/operations.md#tooling-and-support). Times are estimates.
+
 This lab creates a dedicated resource group and cluster. It does not use or modify the cumulative labs 10-15 and 20-23 environment.
 
-Use a separate Bash session outside the cumulative Bastion subshell, on a host with private routing/DNS to this lab's dedicated cluster. The working-folder kubeconfig below is isolated from both your default config and any active cumulative tunnel; that tunnel does not reach this independent API.
+Use a separate Bash session outside any cumulative Bastion session. **The actual `az aks create` below has no `--enable-private-cluster`, custom VNet or Bastion flags: it creates a public API endpoint.** Use an approved workstation with HTTPS reachability and credential-retrieval rights; application Services remain private. The isolated working-folder kubeconfig does not reuse the default or cumulative tunnel configuration. CVM placement does not provide the foundation's Entra-only/private-API hardening.
+
+If policy requires a private API, stop before creation. An operator must separately provision/review a private-cluster variant and a management host with routing/private DNS to that cluster (or a dedicated supported Bastion path). **Those connectivity resources are externally provisioned, not created here.** The cumulative Bastion tunnel cannot reach this independent API, and fetching credentials does not establish network connectivity.
 
 ## Prerequisites, cost, and scope
 
-Use a dedicated subscription or resource group, Azure CLI, Linux Bash, `jq`, and `kubectl`. The operator needs permission to create AKS clusters and node pools. Select a region where a supported AMD confidential VM size such as `Standard_DC4as_v5` is available to the subscription with enough family quota.
+Use a dedicated subscription or resource group, the reviewed Azure CLI **2.90+** baseline, Linux Bash, `jq`, and `kubectl`. The operator needs permission to create AKS clusters and node pools. Select a region where a supported AMD confidential VM size such as `Standard_DC4as_v5` is available to the subscription with enough family quota.
 
 Budget for two system nodes, one ordinary user node, and one confidential user node during the active exercise. Confidential VM availability and price vary by region and agreement. The lab uses Linux; Windows, Intel TDX, FIPS, ARM64, Trusted Launch, pod sandboxing, confidential containers, and node auto-provisioning are not combined with the CVM pool.
 

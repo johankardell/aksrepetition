@@ -1,0 +1,8 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: workload-reliability
+  labels:
+    workshops.aksrepetition/owner: workload-reliability
+    workshops.aksrepetition/run: __WORKSHOP_RUN__
+    pod-security.kubernetes.io/enforce: restricted

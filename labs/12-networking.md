@@ -2,11 +2,34 @@
 
 **Level:** intermediate. **Scenario:** publish an internal business API over HTTPS while restricting dependencies and application traffic.
 
-**Prerequisite:** labs 10-11 complete, a working private management path, Azure CLI 2.86+, and approved Azure Firewall/Private Link charges. The required ingress is internal; global/public publishing is reserved for lab 23.
+## Lab contract
 
-Run Kubernetes commands through lab 10's active native Bastion session. This lab also requires the approved private data-plane/build host: a Bastion API tunnel does not make workstation `dig`, `curl`, `podman` or secret operations reach private endpoints. Run the mixed command blocks on that private host with its own Bastion API session. Supply routing/DNS before disabling public access; keep Bastion's subnet off the AKS node route table.
+| Field | This lab |
+|---|---|
+| Entry | Labs 10–11 healthy; private build-host routing/DNS verified before dependency public access is disabled. |
+| Host and identity | Private build VM with sourced Bastion API session; network/platform operator and separately authorized dependency data access. |
+| Time | Estimate: 2–3 hours active plus 30–90 minutes endpoint, add-on, DNS and certificate propagation waits. |
+| Cost | Adds private endpoints/DNS, gateway capacity and diagnostic ingestion; existing Firewall/Bastion remain billable. |
+| Changes | Platform owns endpoints, UDR, gateway/TLS and client trust; app policies accumulate in rendered base until lab 13. |
+| Exit and re-entry | Ordinary verified HTTPS, attributed denials and restored worker DNS; load correct certificate/trust and recover host override before continuing. |
+
+Use the [session, evidence and cost operating contract](../docs/operations.md), [stage map](../docs/state.md) and [tooling/support baseline](../docs/operations.md#tooling-and-support). Times are estimates.
+
+**Prerequisite:** labs 10-11 complete, a working private management path, the reviewed Azure CLI **2.90+** baseline, and approved Azure Firewall/Private Link charges. Feature-specific minimums do not replace the [central tooling/support gate](../docs/operations.md#tooling-and-support). The required ingress is internal; global/public publishing is reserved for lab 23.
+
+Run Kubernetes commands through lab 10's verified current-shell native Bastion session; if disconnected, use `source ./scripts/activate-aks-bastion.sh`. This lab also requires the approved private data-plane/build host: a Bastion API tunnel does not make workstation `dig`, `curl`, `podman` or secret operations reach private endpoints. Run the mixed command blocks on that private host with its own Bastion API session. Supply routing/DNS before disabling public access; keep Bastion's subnet off the AKS node route table.
 
 **Optional control-plane comparison:** [Lab 29 - Switch API access from public to private](29-api-private-connectivity.md) uses a **separate disposable cluster** to explore API Server VNet Integration, public-to-private cutover and a private endpoint in an unpeered operations VNet. The cumulative API is already private through AKS-managed Private Link; this lab's endpoints are for application dependencies, not an API migration. Skip lab 29 without affecting the handoff to lab 13.
+
+## Resumable Parts and checkpoints
+
+Pause only at a healthy checkpoint. Preserve settings, accumulated render, certificate inventory and UTC evidence privately; rerendering is not recovery.
+
+| Part | Sections | Required checkpoint evidence | Resume/recovery gate |
+|---|---|---|---|
+| Part A — Private dependencies and egress | [1](#1-create-private-service-endpoints-with-dns)–[2](#2-establish-explicit-egress-via-a-peered-firewall-hub) | Private DNS/IPs, disabled public data access, fresh image/CSI/order success, `userDefinedRouting`, firewall diagnostic destination. | Inspect actual endpoint/route state; repair private access without reopening public endpoints or replaying foundation. |
+| Part B — Gateway, DNS and certificate lifecycle | [3](#3-enable-the-managed-gateway-api-implementation)–[4](#4-terminate-tls-at-an-internal-gateway) | Managed class, Programmed gateway/accepted route, normal HTTPS, SAN/expiry/fingerprint and named trust bundle. | Reload trust exports; use the bounded renewal below if expired. Keep the old key/cert private until recovery is verified. |
+| Part C — Attributed controls and restored processing | [5](#5-apply-least-required-application-network-access)–[6](#6-break-and-repair-private-dns-without-changing-production-like-records) | Processed ID, worker-to-API denial, time/destination-matched firewall denial and repaired DNS fault. | Remove only worker `hostAliases` using section 6 recovery; require rollout and fresh processed ID before pausing or adopting into Git. |
 
 ## Directives
 
@@ -174,9 +197,95 @@ export REQUESTS_CA_BUNDLE="$CURL_CA_BUNDLE"
 curl --fail --show-error "https://$(lab_value Hostname)/readyz"
 ```
 
-Trust only the certificate you just generated in this disposable lab; never add an arbitrary supplied root. In each new terminal, source `use-lab.sh` and re-export the three absolute CA bundle paths above before using ordinary HTTPS clients or load scripts. The bundle is explicit client trust, not a system-wide installation; clients that ignore these variables need an approved client-specific CA setting. The self-signed certificate expires after 14 days. Renew it, update the Kubernetes TLS Secret and rebuild the bundle/fingerprint record if resuming after expiry. A trusted enterprise certificate issued for the hostname avoids this local lab trust setup. Do not add certificate-validation bypasses to the load generator.
+Trust only the certificate you just generated in this disposable lab; never add an arbitrary supplied root. In each new terminal, source `use-lab.sh` and re-export the three absolute CA bundle paths above before using ordinary HTTPS clients or load scripts. The bundle is explicit client trust, not a system-wide installation; clients that ignore these variables need an approved client-specific CA setting. The self-signed certificate expires after 14 days. Use the [bounded renewal/expiry checkpoint](#certificate-renewal-and-expiry-checkpoint) below rather than blindly rerunning initial setup after expiry. A trusted enterprise certificate issued for the hostname avoids this local lab trust setup. Do not add certificate-validation bypasses to the load generator.
 
 </details>
+
+### Certificate renewal and expiry checkpoint
+
+**Bounded platform exercise:** renew only `gateway-system/orders-tls` and the named local lab trust bundle. Do this once while the old certificate is still valid, not by expiring the system clock or breaking shared trust. On re-entry after expiry, inspect the dates and repair forward; an expired certificate is not a usable rollback. Allow a two-minute gateway propagation window and stop for diagnosis if it fails. Gateway `Programmed=True` alone does not prove a new certificate is being served.
+
+In the original private management checkout, reload the hostname and inspect validity. A nonzero `-checkend` means renewal is due, not permission to bypass TLS:
+
+```bash
+source ./scripts/use-lab.sh
+RenewalHost=$(lab_value Hostname)
+openssl x509 -in ./rendered/certs/tls.crt -noout -dates -checkhost "$RenewalHost" -fingerprint -sha256
+if openssl x509 -in ./rendered/certs/tls.crt -noout -checkend 86400; then
+  printf 'Certificate remains valid for at least one day; this is a planned renewal rehearsal.\n'
+else
+  printf 'Certificate expires within one day or is expired; inspect dates and renew before HTTPS use.\n'
+fi
+```
+
+Back up the original certificate, key, trust bundle and fingerprint into a **new mode-700 ignored directory**, never evidence committed to Git. Require the local certificate to match the current named Secret before replacing anything; otherwise find the authoritative platform owner's material.
+
+```bash
+umask 077
+RenewalDir="./rendered/certs/renewal-$(date -u +%Y%m%dT%H%M%SZ)"
+mkdir -m 700 "$RenewalDir"
+for File in tls.crt tls.key lab-ca-bundle.pem trusted-fingerprint.txt; do
+  install -m 600 "./rendered/certs/$File" "$RenewalDir/$File"
+done
+OldFingerprint=$(openssl x509 -in "$RenewalDir/tls.crt" -noout -fingerprint -sha256)
+SecretFingerprint=$(kubectl get secret orders-tls -n gateway-system -o jsonpath='{.data.tls\.crt}' |
+  base64 --decode | openssl x509 -noout -fingerprint -sha256)
+[[ "$OldFingerprint" == "$SecretFingerprint" ]] || {
+  printf 'Local certificate does not match orders-tls; stop and resolve ownership.\n' >&2; exit 1;
+}
+printf 'Private renewal backup: %s\n' "$RenewalDir"
+bash ./scripts/new-lab-certificate.sh --hostname "$RenewalHost"
+openssl x509 -in ./rendered/certs/tls.crt -noout -checkhost "$RenewalHost" -checkend 86400
+NewFingerprint=$(openssl x509 -in ./rendered/certs/tls.crt -noout -fingerprint -sha256)
+[[ "$NewFingerprint" != "$OldFingerprint" ]]
+kubectl create secret tls orders-tls -n gateway-system \
+  --cert ./rendered/certs/tls.crt --key ./rendered/certs/tls.key \
+  --dry-run=client -o yaml | kubectl apply -f -
+if [[ -f /etc/ssl/certs/ca-certificates.crt ]]; then
+  SystemCaBundle=/etc/ssl/certs/ca-certificates.crt
+elif [[ -f /etc/pki/tls/certs/ca-bundle.crt ]]; then
+  SystemCaBundle=/etc/pki/tls/certs/ca-bundle.crt
+else
+  printf 'Select the approved system PEM CA bundle before continuing.\n' >&2; exit 1
+fi
+cat "$SystemCaBundle" ./rendered/certs/tls.crt > ./rendered/certs/lab-ca-bundle.pem
+printf '%s\n' "$NewFingerprint" > ./rendered/certs/trusted-fingerprint.txt
+export CURL_CA_BUNDLE="$Root/rendered/certs/lab-ca-bundle.pem"
+export SSL_CERT_FILE="$CURL_CA_BUNDLE" REQUESTS_CA_BUNDLE="$CURL_CA_BUNDLE"
+RenewalDeadline=$((SECONDS + 120))
+while ! curl --fail --silent --show-error --max-time 10 "https://$RenewalHost/readyz"; do
+  (( SECONDS < RenewalDeadline )) || {
+    printf 'New certificate not serving verified HTTPS; inspect gateway listeners/Secret and use recovery below.\n' >&2
+    exit 1
+  }
+  sleep 5
+done
+ServedFingerprint=$(timeout 10 openssl s_client -connect "$RenewalHost:443" -servername "$RenewalHost" \
+  -verify_hostname "$RenewalHost" -verify_return_error -CAfile "$CURL_CA_BUNDLE" </dev/null \
+  2>"$RenewalDir/verification.txt" | openssl x509 -noout -fingerprint -sha256)
+[[ "$ServedFingerprint" == "$NewFingerprint" ]]
+openssl x509 -in ./rendered/certs/tls.crt -noout -dates -fingerprint -sha256
+```
+
+Retain old/new fingerprints, UTC, expiry, Secret name and successful **ordinary DNS/HTTPS** result; never record private-key contents. A timeout is failed renewal evidence, not a pass. Diagnose `kubectl describe gateway orders-gateway -n gateway-system`, listener conditions, Secret namespace/reference, DNS, SAN, dates and the verified served fingerprint; no `-k`, blanket Secret deletion or system-root modification.
+
+**Interrupted renewal/recovery:** recover the exact printed `RenewalDir`, not a wildcard “latest” directory. If restoring the prior certificate is approved, first require it still valid; otherwise repair the new Secret/bundle forward.
+
+```bash
+: "${RenewalDir:?Recover the exact private backup directory from this renewal}"
+openssl x509 -in "$RenewalDir/tls.crt" -noout -checkend 0 -checkhost "$(lab_value Hostname)"
+for File in tls.crt tls.key lab-ca-bundle.pem trusted-fingerprint.txt; do
+  install -m 600 "$RenewalDir/$File" "./rendered/certs/$File"
+done
+kubectl create secret tls orders-tls -n gateway-system \
+  --cert ./rendered/certs/tls.crt --key ./rendered/certs/tls.key \
+  --dry-run=client -o yaml | kubectl apply -f -
+export CURL_CA_BUNDLE="$Root/rendered/certs/lab-ca-bundle.pem"
+export SSL_CERT_FILE="$CURL_CA_BUNDLE" REQUESTS_CA_BUNDLE="$CURL_CA_BUNDLE"
+curl --fail --show-error --max-time 10 "https://$(lab_value Hostname)/readyz"
+```
+
+The recovery block is **only for failed/interrupted renewal**, not the successful path. Allow the same bounded propagation interval, then verify the served fingerprint equals the restored certificate. Keep backups protected for the agreed rollback period. At final teardown, after gateways are retired, inventory each renewal directory and securely remove only its identified lab files through the host's approved process; never recursively delete unrelated trust stores.
 
 ### 5. Apply least-required application network access
 
@@ -304,6 +413,8 @@ Use a new ID with the HTTPS order command in task 5 and find that same ID in the
 ## Exit evidence and customer discussion
 
 Keep private resolutions, disabled public data endpoints, the effective outbound type, accepted TLS route, negative east-west/outbound evidence, firewall log correlation and restored processing.
+
+Before lab 13, [lab 27 Tier 2](27-kustomize.md#tier-2---medium-create-development-and-production-overlays) is recommended offline preparation for overlays. Composition is not delivery: this practice must not reinitialize, apply over or replace the accumulated rendered source that Flux adopts next.
 
 <details>
 <summary>Model answer: Does private AKS mean the app cannot be public?</summary>

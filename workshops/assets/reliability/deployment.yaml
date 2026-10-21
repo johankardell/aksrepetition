@@ -1,0 +1,95 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: diagnostic
+spec:
+  replicas: 2
+  minReadySeconds: 5
+  progressDeadlineSeconds: 120
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 0
+  selector:
+    matchLabels:
+      app: diagnostic
+  template:
+    metadata:
+      labels:
+        app: diagnostic
+    spec:
+      automountServiceAccountToken: false
+      terminationGracePeriodSeconds: 15
+      nodeSelector:
+        kubernetes.azure.com/agentpool: apps
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        runAsGroup: 10001
+        fsGroup: 10001
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: diagnostic
+          image: __WORKSHOP_IMAGE__
+          imagePullPolicy: IfNotPresent
+          command: ["python", "-B", "/work/diagnostic.py", "serve"]
+          env:
+            - name: REVISION
+              value: v1
+          ports:
+            - name: http
+              containerPort: 8080
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          resources:
+            requests:
+              cpu: 100m
+              memory: 64Mi
+              ephemeral-storage: 16Mi
+            limits:
+              cpu: 200m
+              memory: 128Mi
+              ephemeral-storage: 32Mi
+          startupProbe:
+            httpGet:
+              path: /startupz
+              port: http
+            periodSeconds: 2
+            timeoutSeconds: 1
+            failureThreshold: 20
+          readinessProbe:
+            httpGet:
+              path: /readyz
+              port: http
+            periodSeconds: 2
+            timeoutSeconds: 1
+            failureThreshold: 1
+          livenessProbe:
+            httpGet:
+              path: /livez
+              port: http
+            periodSeconds: 2
+            timeoutSeconds: 1
+            failureThreshold: 3
+          lifecycle:
+            preStop:
+              exec:
+                command: ["python", "-B", "/work/diagnostic.py", "drain"]
+          volumeMounts:
+            - name: code
+              mountPath: /work
+              readOnly: true
+            - name: state
+              mountPath: /state
+      volumes:
+        - name: code
+          configMap:
+            name: diagnostic-code
+        - name: state
+          emptyDir:
+            sizeLimit: 8Mi

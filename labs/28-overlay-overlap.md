@@ -4,6 +4,19 @@
 
 **Outcome:** an actual HTTP service in a peered VNet, a successful independent VM request, a failed pod request to the same IP, and successful requests from both clients after removing the overlap.
 
+## Lab contract
+
+| Field | This lab |
+|---|---|
+| Entry | Optional isolated experiment; never connect its deliberately overlapping VNets to cumulative/shared networks. |
+| Host and identity | Fresh workstation session; Entra platform operator, scoped Run Command and role authority; dedicated native Bastion preview path. |
+| Time | Estimate: 90–150 minutes active plus 30–90 minutes cluster/VM/network waits. |
+| Cost | Two AKS nodes, two VMs/disks, Standard AKS, NAT/public IP, Bastion/public IP and peering; approve a cleanup deadline. |
+| Changes | Operator owns only tagged disposable resources; pod/server collision is intentional unsupported design, not recommended networking. |
+| Exit and re-entry | Same-IP VM-success/pod-failure and nonoverlapping recovery evidence; reload run marker/context and inspect exact allocations before cleanup. |
+
+Use the [session, evidence and cost operating contract](../docs/operations.md), [stage map](../docs/state.md) and [tooling/support baseline](../docs/operations.md#tooling-and-support). Times are estimates.
+
 ## Prerequisites, cost, and safety boundary
 
 **This deliberately creates an unsupported network design. Use a new disposable resource group and isolated VNets only.** Never peer this experiment with the cumulative foundation, corporate networks, VPN/ExpressRoute, shared DNS or another cluster. Do not change the existing labs' pod CIDR or infrastructure. The ordinary rule remains: pod, Service and connected external address spaces must not overlap.

@@ -1,0 +1,57 @@
+name: Offline curriculum checks
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: offline-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  validate:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6, reviewed 2026-10-21
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6, reviewed 2026-10-21
+        with:
+          python-version: "3.12"
+      - name: Install local validation dependencies
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq jq zsh
+          python -m pip install -r app/requirements.txt -r tests/requirements.txt
+          version=v1.37.1
+          directory=$(mktemp -d)
+          trap 'rm -f "$directory/kubectl" "$directory/kubectl.sha256"; rmdir "$directory"' EXIT
+          curl --fail --silent --show-error --location "https://dl.k8s.io/release/$version/bin/linux/amd64/kubectl" -o "$directory/kubectl"
+          curl --fail --silent --show-error --location "https://dl.k8s.io/release/$version/bin/linux/amd64/kubectl.sha256" -o "$directory/kubectl.sha256"
+          (cd "$directory"; printf '%s  kubectl\n' "$(cat kubectl.sha256)" | sha256sum --check)
+          sudo install -m 0755 "$directory/kubectl" /usr/local/bin/kubectl
+          az bicep install --version v0.48.1
+      - name: Run documentation, helper and application regressions
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -m unittest discover -s tests -v
+          (cd app && python -m unittest discover -v)
+      - name: Compile templates and render source manifests without credentials
+        shell: bash
+        run: |
+          set -euo pipefail
+          for template in infra/*.bicep ops/*.bicep advanced/*.bicep; do
+            az bicep build --file "$template" --stdout >/dev/null
+          done
+          for source in k8s/base advanced/governance advanced/storage; do
+            kubectl kustomize "$source" >/dev/null
+          done
+          for script in scripts/*.sh ops/*.sh advanced/*.sh; do
+            bash -n "$script"
+            zsh -n "$script"
+          done
