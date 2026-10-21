@@ -4,7 +4,8 @@
 
 - This is a cumulative AKS operations curriculum. Beginner labs 1-6 use the same foundation and hand off to lab 10 without redeployment/rerendering; experienced learners can start fresh at lab 10. Intermediate 10-15 and advanced 20-23 progressively mutate that environment. Labs 24-29 are optional specialists with their own prerequisites; lab 27 is mixed-level and offline. Lab 28 deliberately overlaps an overlay pod IP with a peered service in an isolated disposable environment; never connect it to cumulative/shared networks. Lab 29 switches a separate VNet-integrated cluster from public to private API access and adds an unpeered consumer private endpoint; never change the cumulative API for this exercise.
 - End every lab with a visible link to the next lab, after references and outside collapsed blocks. Preserve numbering gaps and mark optional transitions; the final lab links back to the README lab index.
-- Treat `README.md`, `docs/operations.md`, `docs/state.md` and the relevant lab/workshop as the operational source of truth. The README is navigation; the handbook owns shared procedures and tooling, and the state map owns transitions. Lab command blocks assume Linux, Bash 5+, `jq`, Python 3.12+, and execution from the repository root. Native Bastion supplies cumulative AKS API access; Azure data endpoints still require private connectivity/DNS. All `.sh` helpers also support execution under Zsh 5.9+; only `use-lab.sh`, `activate-aks-bastion.sh`, and `lib.sh` are intended for sourcing.
+- Treat `README.md`, `docs/operations.md`, `docs/state.md` and the relevant lab/workshop as the operational source of truth. The README is navigation; the handbook owns shared procedures and tooling, and the state map owns transitions. Lab command blocks assume Linux, Bash 5+ or Zsh 5.9+, `jq`, Python 3.12+, and execution from the repository root. Native Bastion supplies cumulative AKS API access; Azure data endpoints still require private connectivity/DNS. All `.sh` helpers support both shells; only `use-lab.sh`, `activate-aks-bastion.sh`, and `lib.sh` are intended for sourcing.
+- Keep shared blocks free of Bash-only read/mapfile/capture-array syntax and Zsh special-parameter assignments. Label unavoidable Bash facilities and invoke them explicitly with `bash`; do not switch or emulate the caller's entire session. The handbook documents interactive Zsh comments and the Azure CLI's Bash-subshell boundary.
 - Use visible per-lab entry/host/time/cost/change/exit contracts and resumable checkpoints. Optional workshops never silently alter cumulative prerequisites or primary behavior. Fleet is an optional lifecycle side exercise after secondary preparation, not a DR gate.
 - Native Bastion tunneling is the primary AKS API path for cumulative labs, with the explicit `aks-preview` exception described in labs 3 and 10. Prefer sourcing `scripts/activate-aks-bastion.sh` for the current shell; `scripts/connect-aks-bastion.sh` retains the preview command's subshell workflow. Both use user credentials, temporary kubeconfigs and verified TLS. Never overwrite an active tunnel kubeconfig with `get-credentials`; Bastion does not provide registry/database/application routing.
 - Do not execute billable deployments, destructive cleanup, fault injection, or cluster mutations to validate code. Prefer offline checks unless live execution and the target context are explicitly confirmed.
@@ -35,9 +36,9 @@ for template in infra/*.bicep ops/*.bicep advanced/*.bicep; do
   az bicep build --file "$template" --stdout >/dev/null
 done
 kubectl kustomize k8s/base >/dev/null
-for script in scripts/*.sh ops/*.sh advanced/*.sh; do bash -n "$script"; done
+for script in scripts/*.sh ops/*.sh advanced/*.sh infra/*.sh; do bash -n "$script"; done
 # When Zsh is installed:
-for script in scripts/*.sh ops/*.sh advanced/*.sh; do zsh -n "$script"; done
+for script in scripts/*.sh ops/*.sh advanced/*.sh infra/*.sh; do zsh -n "$script"; done
 ```
 
 Validate changed initialized GitOps overlays with `kubectl kustomize gitops/clusters/primary/apps/<namespace>`. Generated overlays exist only in configured checkouts. Run `shellcheck scripts/*.sh ops/*.sh advanced/*.sh` when ShellCheck is available.

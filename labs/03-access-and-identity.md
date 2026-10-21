@@ -104,7 +104,7 @@ Run the remaining mixed Azure/Kubernetes/application commands on this VM. A sepa
 source ./scripts/activate-aks-bastion.sh
 ```
 
-Keep this Bash shell open. The helper supplies a temporary mode-600 kubeconfig, preserving the private hostname/CA for TLS and using Entra user credentials. It does not replace your default kubeconfig.
+Keep this Bash or Zsh shell open. The helper supplies a temporary mode-600 kubeconfig, preserving the private hostname/CA for TLS and using Entra user credentials. It does not replace your default kubeconfig.
 
 ```bash
 set -euo pipefail

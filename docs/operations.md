@@ -96,7 +96,7 @@ is the same version. Lower minimums quoted by an upstream feature do not overrid
 
 | Tool or surface | Reviewed baseline / rule |
 |---|---|
-| Shell and Python | Linux, Bash 5+, Python 3.12+; executable helpers also support Zsh 5.9+. Lab blocks remain Bash. |
+| Shell and Python | Linux, Bash 5+ or Zsh 5.9+, Python 3.12+. Keep Bash installed for the explicitly selected child interpreters below. |
 | Azure CLI | 2.90+; inspect current command help and regional service support before execution. |
 | Native Bastion extensions | `aks-preview` 22.0.0b5 and `bastion` 1.4.3, checked 2026-10-01; explicitly accepted preview exception. Do not silently downgrade an incompatible installed release. |
 | Kubernetes client | Match the chosen supported AKS minor, or remain within supported one-minor skew. Record embedded Kustomize version with `kubectl version --client`. |
@@ -113,6 +113,33 @@ does not recertify those service claims. Before execution review the linked live
 matrices, especially Gateway API, backup, Fleet, KAITO and storage.
 
 ## Tooling, access, and private connectivity
+
+### Bash and Zsh
+
+The lab/workshop command blocks and repository `.sh` helpers support **Bash 5+ and Zsh 5.9+**.
+The `bash` Markdown fence is syntax highlighting, not a requirement to switch your whole
+session. Run from the repository root. Before pasting commented blocks into an interactive
+Zsh terminal, enable comments once in that terminal:
+
+```bash
+if [[ -n ${ZSH_VERSION:-} ]]; then
+  setopt INTERACTIVE_COMMENTS
+fi
+```
+
+Use ordinary native shell options; do not globally enable `SH_WORD_SPLIT`, `KSH_ARRAYS` or
+`emulate sh` to make Bash examples appear to work. For a heavily customized shell, start
+`zsh -f` or `bash --noprofile --norc` before loading the lab state. Sourced helpers stay in
+the caller's shell and preserve its options.
+
+**Explicit interpreter boundaries:** lab 13's `/dev/tcp` connectivity check is Bash-only
+and already runs through `timeout ... bash -c`. The Azure `az aks bastion tunnel` preview
+command opens a **Bash child shell**, even when invoked from Zsh; use
+`source ./scripts/activate-aks-bastion.sh` for a native current-shell Zsh session instead.
+GitHub Actions steps explicitly select `shell: bash`, and cloud-init runs the bootstrap's
+Bash shebang (the script is also Zsh-compatible). Keep those interpreter declarations;
+do not source child scripts just to change their interpreter. Container/VM commands using
+`sh -c` contain only POSIX shell syntax and run in the target image, not your host shell.
 
 Use the [reviewed tooling baseline](#tooling-and-support) on Linux with GNU coreutils/findutils,
 `jq`, `curl`, OpenSSH (`ssh-keygen`), `ca-certificates`, `dig` (dnsutils/bind-utils), Bicep,
@@ -250,7 +277,7 @@ done
 
 Example regions are **not** an availability guarantee. Check AKS, Service Bus Premium, the VM family, managed monitoring, PostgreSQL, backup and Fleet requirements before choosing. Check current AKS versions with [the AKS release tracker](https://releases.aks.azure.com/); a listed preview is not a supported GA choice. If quota or regional compatibility blocks a required path, stop and resolve it rather than silently substituting a different service.
 
-All `.sh` helpers under `scripts/`, `ops/` and `advanced/` support execution with Bash 5+ or Zsh 5.9+. The shebang defaults to Bash; choose Zsh explicitly with `zsh ./scripts/<name>.sh --kebab-case-option value`. Execute helpers rather than sourcing them, except for `scripts/use-lab.sh`, `scripts/activate-aks-bastion.sh` and the shared `scripts/lib.sh`. The lab command blocks remain Bash-oriented; run `bash` before following those blocks if your terminal uses another shell. Offline helper tests run under both shells when Zsh is installed.
+All `.sh` helpers under `scripts/`, `ops/`, `advanced/` and `infra/` support execution with Bash 5+ or Zsh 5.9+. The shebang defaults to Bash; choose Zsh explicitly with `zsh ./scripts/<name>.sh --kebab-case-option value`. Execute helpers rather than sourcing them, except for `scripts/use-lab.sh`, `scripts/activate-aks-bastion.sh` and the shared `scripts/lib.sh`. Follow the [shell setup and interpreter boundaries](#bash-and-zsh); do not run the privileged VM bootstrap on your workstation. Offline helper and documented command regressions run under both shells when Zsh is installed.
 
 `use-lab.sh` verifies your settings and Azure context; it never silently changes subscriptions or shell options. Source it **from Bash or Zsh** to load `Lab` and `Outputs` as JSON strings. Sourcing does not honor the script's shebang, and running `bash ./scripts/use-lab.sh` or `zsh ./scripts/use-lab.sh` does not load variables into your current shell. A validation error returns a nonzero status so you can correct `local.settings.json` and retry; if you already enabled `set -e`, use `if source ./scripts/use-lab.sh; then echo 'Lab state loaded'; else echo 'Fix the reported error before continuing' >&2; fi` to keep the shell open. Read settings with `lab_value Prefix` and deployment outputs with `output_value registryServer`; use `jq` for other JSON responses. Execute other helpers with `bash ./scripts/<name>.sh --kebab-case-option value` or the equivalent `zsh` command; script filenames use lowercase kebab-case. The helpers obtain generated resource names from the `foundation` deployment. Do not commit local settings, credentials, rendered certificates or evidence containing personal data.
 

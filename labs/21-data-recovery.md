@@ -177,7 +177,8 @@ If the lab-13 source lives outside `k8s`, stage its actual path instead. Expecte
 Post an order through the lab-12 TLS application URL, wait for durable processing, restart the worker and verify it still exists:
 
 ```bash
-read -r -p 'Lab 12 HTTPS application base URL: ' AppUrl
+printf '%s' 'Lab 12 HTTPS application base URL: ' >&2
+read -r AppUrl
 AppUrl=${AppUrl%/}
 [[ "$AppUrl" == https://* ]] || { printf '%s\n' 'Use the trusted HTTPS application URL.' >&2; exit 1; }
 Order=$(jq -nc --arg id "durable-$(openssl rand -hex 16)" '{id:$id,item:"blue-widget"}')
@@ -293,11 +294,12 @@ Add `files.yaml` to `advanced/storage/kustomization.yaml`'s resources list, rend
 ```bash
 kubectl rollout status deployment/files-reader -n files-lab --timeout=600s
 ReaderPods=$(kubectl get pods -n files-lab -l app=files-reader -o json)
-ReaderNames=$(jq -er '.items[].metadata.name' <<< "$ReaderPods")
-mapfile -t Readers <<< "$ReaderNames"
-(( ${#Readers[@]} >= 2 )) || { printf '%s\n' 'Expected two Files readers.' >&2; exit 1; }
-kubectl exec -n files-lab "${Readers[0]}" -- sh -c 'printf "shared-evidence\n" > /data/shared.txt; sync'
-kubectl exec -n files-lab "${Readers[1]}" -- cat /data/shared.txt
+jq -e '.items | length >= 2' <<< "$ReaderPods" >/dev/null ||
+  { printf '%s\n' 'Expected two Files readers.' >&2; exit 1; }
+FirstReader=$(jq -er '.items[0].metadata.name' <<< "$ReaderPods")
+SecondReader=$(jq -er '.items[1].metadata.name' <<< "$ReaderPods")
+kubectl exec -n files-lab "$FirstReader" -- sh -c 'printf "shared-evidence\n" > /data/shared.txt; sync'
+kubectl exec -n files-lab "$SecondReader" -- cat /data/shared.txt
 ```
 
 Expected: both replicas read the same file. `ReadWriteOnce` is a **single-node** access mode, not a single-pod lock; `ReadWriteMany` supports multi-node writers but does not provide application locking. LRS Disk topology can bind to a zone; `WaitForFirstConsumer` avoids premature placement. `Delete` reclaim is deliberately dangerous and cheap for the synthetic exercise. Production may choose `Retain` with an explicit orphan-disk cleanup procedure.
@@ -432,7 +434,8 @@ az dataprotection recovery-point list -g "$(lab_value ResourceGroup)" --vault-na
 **Stop until the specific backup job is Completed and its recovery point exists.** Save the job ID, timestamps and recovery-point name. Do not pick "latest" before the requested backup has finished. The job should include the Disk PVC and have no skipped/failed protected volume.
 
 ```bash
-read -r -p 'Verified completed operational recovery point name: ' RecoveryPointId
+printf '%s' 'Verified completed operational recovery point name: ' >&2
+read -r RecoveryPointId
 [[ -n "$RecoveryPointId" ]] || { printf '%s\n' 'A verified recovery point is required.' >&2; exit 1; }
 kubectl exec -n storage-lab deployment/ledger -- sh -c 'rm /data/ledger.csv; sync'
 # Controlled incident: source file is now absent.

@@ -49,7 +49,8 @@ Keep the verified current-shell session or reconnect with `source ./scripts/acti
 ```bash
 set -euo pipefail
 source ./scripts/use-lab.sh
-read -r -p 'Existing private GitHub repository (owner/name): ' GitHubRepository
+printf '%s' 'Existing private GitHub repository (owner/name): ' >&2
+read -r GitHubRepository
 if [[ ! "$GitHubRepository" =~ ^[^/]+/[^/]+$ ]]; then
   printf '%s\n' 'Use owner/name.' >&2
   exit 1
@@ -62,6 +63,7 @@ kubelogin convert-kubeconfig -l azurecli
 kubectl auth can-i get deployments -n orders
 dig "$(lab_value RegistryServer)"
 getent ahostsv4 "$(lab_value RegistryServer)"
+# Bash-only /dev/tcp redirection: keep this explicit child interpreter even from Zsh.
 timeout 10 bash -c 'exec 3<>/dev/tcp/$1/443' bash "$(lab_value RegistryServer)"
 flux version --client
 flux check --pre
@@ -131,7 +133,8 @@ Review `.github/workflows/publish-image.yml` and commit the authored curriculum 
 ```bash
 gh workflow run publish-image.yml --repo "$GitHubRepository" --ref main
 gh run list --repo "$GitHubRepository" --workflow publish-image.yml --limit 5
-read -r -p 'Successful reviewed workflow run ID: ' RunId
+printf '%s' 'Successful reviewed workflow run ID: ' >&2
+read -r RunId
 if [[ ! "$RunId" =~ ^[0-9]+$ ]]; then
   printf '%s\n' 'Use a numeric workflow run ID.' >&2
   exit 1
@@ -141,12 +144,11 @@ gh run view "$RunId" --repo "$GitHubRepository"
 ArtifactDirectory=".artifacts/image/$RunId"
 gh run download "$RunId" --repo "$GitHubRepository" --pattern 'order-image-*' --dir "$ArtifactDirectory"
 ReferencePaths=$(find "$ArtifactDirectory" -type f -name image-reference.txt)
-mapfile -t ReferenceFiles <<< "$ReferencePaths"
-if [[ ${#ReferenceFiles[@]} -ne 1 || ! -f "${ReferenceFiles[0]}" ]]; then
+if [[ -z "$ReferencePaths" || "$ReferencePaths" == *$'\n'* || ! -f "$ReferencePaths" ]]; then
   printf '%s\n' 'Expected exactly one image-reference.txt for the selected run.' >&2
   exit 1
 fi
-Reference=$(< "${ReferenceFiles[0]}")
+Reference=$(< "$ReferencePaths")
 Reference=${Reference%$'\r'}
 Digest=${Reference##*@}
 if [[ ! "$Digest" =~ ^sha256:[a-f0-9]{64}$ ]] \
@@ -231,19 +233,22 @@ For a **personal-account repository**, add `--personal` to bootstrap. Do not rev
 <summary>Solution</summary>
 
 ```bash
-IFS=/ read -r -a parts <<< "$GitHubRepository"
+GitOwner=${GitHubRepository%%/*}
+GitRepository=${GitHubRepository#*/}
 set +x
 trap 'unset GITHUB_TOKEN ReadOnlyPat' EXIT
-read -r -s -p 'Short-lived bootstrap PAT (hidden): ' GITHUB_TOKEN
+printf '%s' 'Short-lived bootstrap PAT (hidden): ' >&2
+read -r -s GITHUB_TOKEN
 printf '\n'
 export GITHUB_TOKEN
 # Existing repository was verified in directive 1; bootstrap must not create another.
-flux bootstrap github --owner="${parts[0]}" --repository="${parts[1]}" \
+flux bootstrap github --owner="$GitOwner" --repository="$GitRepository" \
   --branch=main --path=gitops/clusters/primary --token-auth \
   --registry="$(lab_value RegistryServer)/fluxcd"
 unset GITHUB_TOKEN
 git pull --ff-only
-read -r -s -p 'Separate runtime PAT: this repository, Contents read only (hidden): ' ReadOnlyPat
+printf '%s' 'Separate runtime PAT: this repository, Contents read only (hidden): ' >&2
+read -r -s ReadOnlyPat
 printf '\n'
 flux create secret git flux-system --namespace=flux-system \
   --url="https://github.com/$GitHubRepository" --username=git --password="$ReadOnlyPat"
@@ -274,7 +279,7 @@ The source reconciliation after replacing the Secret verifies the read-only cred
 <details>
 <summary>Solution</summary>
 
-In another Bash terminal:
+In another Bash or Zsh terminal:
 
 ```bash
 kubectl -n orders-test port-forward service/order-api 8082:80
@@ -340,7 +345,7 @@ After approving/merging this explicitly labeled fault:
 BadCommit=$(git rev-parse HEAD)
 ```
 
-Capture the expected health-check failure without terminating the shared Bash session. Allow ten minutes for the CLI, longer than the child's five-minute health-check timeout, so the controller can report its failure. Require a current-generation health condition rather than treating any Flux connection error as the expected result:
+Capture the expected health-check failure without terminating the shared Bash or Zsh session. Allow ten minutes for the CLI, longer than the child's five-minute health-check timeout, so the controller can report its failure. Require a current-generation health condition rather than treating any Flux connection error as the expected result:
 
 ```bash
 Status=0

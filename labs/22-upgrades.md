@@ -55,7 +55,8 @@ Allowed=$(jq -c '[.controlPlaneProfile.upgrades[]? | select(.isPreview != true) 
   printf '%s\n' 'No supported non-preview target; defer the Kubernetes-version portion.' >&2; exit 1;
 }
 printf 'Advertised GA targets: %s\n' "$(jq -r 'join(", ")' <<< "$Allowed")"
-read -r -p 'Approved target: ' Target
+printf '%s' 'Approved target: ' >&2
+read -r Target
 jq -e --arg target "$Target" 'index($target) != null' <<< "$Allowed" > /dev/null || {
   printf '%s\n' 'Target is not an advertised supported non-preview upgrade.' >&2; exit 1;
 }
@@ -168,12 +169,13 @@ Expected at least one allowed disruption and successful eviction. If the second 
 <details>
 <summary>Solution</summary>
 
-Use two Bash terminals on the management host. In terminal A:
+Use two Bash or Zsh terminals on the management host. In terminal A:
 
 ```bash
 set -euo pipefail
 source ./scripts/use-lab.sh
-read -r -p 'Lab 12 HTTPS application base URL: ' AppUrl
+printf '%s' 'Lab 12 HTTPS application base URL: ' >&2
+read -r AppUrl
 AppUrl=${AppUrl%/}
 [[ "$AppUrl" == https://* ]] || { printf '%s\n' 'Use the trusted HTTPS application URL.' >&2; exit 1; }
 [[ -r "$Root/rendered/certs/lab-ca-bundle.pem" ]] || { printf '%s\n' 'Restore the approved lab-12 CA bundle on this host first.' >&2; exit 1; }
@@ -307,7 +309,8 @@ Only with an approved matrix, use the [reviewed-change contract](../docs/operati
 
 ```bash
 git log --oneline -12
-read -r -p 'Reviewed application-only release commit to revert: ' AppReleaseCommit
+printf '%s' 'Reviewed application-only release commit to revert: ' >&2
+read -r AppReleaseCommit
 [[ "$AppReleaseCommit" =~ ^[[:xdigit:]]{7,40}$ ]] || { printf '%s\n' 'Expected a reviewed commit SHA.' >&2; exit 1; }
 git --no-pager show --stat "$AppReleaseCommit"
 git --no-pager show "$AppReleaseCommit" -- ./gitops/clusters/primary/apps/orders

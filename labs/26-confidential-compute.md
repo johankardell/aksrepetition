@@ -19,7 +19,7 @@ Use the [session, evidence and cost operating contract](../docs/operations.md), 
 
 This lab creates a dedicated resource group and cluster. It does not use or modify the cumulative labs 10-15 and 20-23 environment.
 
-Use a separate Bash session outside any cumulative Bastion session. **The actual `az aks create` below has no `--enable-private-cluster`, custom VNet or Bastion flags: it creates a public API endpoint.** Use an approved workstation with HTTPS reachability and credential-retrieval rights; application Services remain private. The isolated working-folder kubeconfig does not reuse the default or cumulative tunnel configuration. CVM placement does not provide the foundation's Entra-only/private-API hardening.
+Use a separate Bash or Zsh session outside any cumulative Bastion session, following the [shell setup](../docs/operations.md#bash-and-zsh). **The actual `az aks create` below has no `--enable-private-cluster`, custom VNet or Bastion flags: it creates a public API endpoint.** Use an approved workstation with HTTPS reachability and credential-retrieval rights; application Services remain private. The isolated working-folder kubeconfig does not reuse the default or cumulative tunnel configuration. CVM placement does not provide the foundation's Entra-only/private-API hardening.
 
 If policy requires a private API, stop before creation. An operator must separately provision/review a private-cluster variant and a management host with routing/private DNS to that cluster (or a dedicated supported Bastion path). **Those connectivity resources are externally provisioned, not created here.** The cumulative Bastion tunnel cannot reach this independent API, and fetching credentials does not establish network connectivity.
 
@@ -89,7 +89,8 @@ az aks get-versions --location "$Location" -o table
 az vm list-usage --location "$Location" -o table
 az vm list-skus --location "$Location" --size "$ConfidentialVmSize" --all \
   --query "[].{name:name,zones:locationInfo[0].zones,restrictions:restrictions,capabilities:capabilities}" -o json
-read -r -p 'Exact supported Kubernetes version from get-versions: ' KubernetesVersion
+printf '%s' 'Exact supported Kubernetes version from get-versions: ' >&2
+read -r KubernetesVersion
 [[ "$KubernetesVersion" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] ||
   { printf 'Supply an exact supported Kubernetes version.\n' >&2; exit 1; }
 GroupExists=$(az group exists --name "$ResourceGroup")
@@ -570,11 +571,13 @@ az resource list --resource-group "$ResourceGroup" -o table
 Only after confirming the resource group is the dedicated disposable lab boundary:
 
 ```bash
-read -r -p "Type $ResourceGroup to confirm the disposable resource-group boundary: " ConfirmGroup
+printf '%s' "Type $ResourceGroup to confirm the disposable resource-group boundary: " >&2
+read -r ConfirmGroup
 [[ "$ConfirmGroup" == "$ResourceGroup" ]] || { printf 'Deletion not confirmed.\n' >&2; exit 1; }
 az group delete --name "$ResourceGroup"
 # Preserve evidence outside this disposable folder before confirming its removal.
-read -r -p "Type $Work to confirm local manifest/evidence removal: " ConfirmWork
+printf '%s' "Type $Work to confirm local manifest/evidence removal: " >&2
+read -r ConfirmWork
 [[ "$ConfirmWork" == "$Work" && -d "$Work" && "$Work" == "${TMPDIR:-/tmp}/aks-confidential-compute-lab."* ]] ||
   { printf 'Local cleanup not confirmed or path is not the lab folder.\n' >&2; exit 1; }
 rm -r -- "$Work"

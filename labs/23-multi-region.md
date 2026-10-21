@@ -192,7 +192,8 @@ printf '%s\n' "$KUBECONFIG"
 Keep that owner subshell alive. In the **original primary terminal**, merge the printed exact path without copying or overwriting either file:
 
 ```bash
-read -r -p 'Temporary kubeconfig path printed by the secondary tunnel on this host: ' SecondaryTunnelConfig
+printf '%s' 'Temporary kubeconfig path printed by the secondary tunnel on this host: ' >&2
+read -r SecondaryTunnelConfig
 [[ -r "$PrimaryTunnelConfig" && -r "$SecondaryTunnelConfig" && "$SecondaryTunnelConfig" != *:* ]] || {
   printf '%s\n' 'Both live, single-file tunnel kubeconfigs must be readable on this same host.' >&2; exit 1;
 }
@@ -380,8 +381,10 @@ Bootstrap Flux in the secondary with the **existing lab-13 repository** and its 
 Use the same Flux CLI/controller version mirrored in lab 13. If upgrading that version, run `ops/mirror-flux-images.sh` again on the authorized private Podman host and verify the new controller digests before bootstrapping; the secondary firewall does not allow direct `ghcr.io` pulls. Apply the same narrowly approved temporary bootstrap branch-policy exception as lab 13, then remove it. Normal application/platform changes continue through `publish-reviewed-change.sh`, not direct pushes to protected `main`.
 
 ```bash
-read -r -p 'Existing GitHub owner: ' GitOwner
-read -r -p 'Existing lab 13 repository name: ' GitRepository
+printf '%s' 'Existing GitHub owner: ' >&2
+read -r GitOwner
+printf '%s' 'Existing lab 13 repository name: ' >&2
+read -r GitRepository
 GitUrl="https://github.com/$GitOwner/$GitRepository.git"
 git ls-remote "$GitUrl" HEAD
 GitBranch=$(gh repo view "$GitOwner/$GitRepository" --json defaultBranchRef --jq .defaultBranchRef.name)
@@ -390,7 +393,8 @@ PersonalArgs=()
 if [[ "$OwnerType" == User ]]; then PersonalArgs=(--personal); fi
 (
   trap 'unset GITHUB_TOKEN' EXIT
-  read -rs -p 'Short-lived existing-repo bootstrap PAT (masked): ' GITHUB_TOKEN
+  printf '%s' 'Short-lived existing-repo bootstrap PAT (masked): ' >&2
+  read -r -s GITHUB_TOKEN
   printf '\n'
   export GITHUB_TOKEN
   flux bootstrap github --context "$SecondaryContext" --owner "$GitOwner" --repository "$GitRepository" \
@@ -398,7 +402,8 @@ if [[ "$OwnerType" == User ]]; then PersonalArgs=(--personal); fi
 )
 (
   trap 'unset RuntimePat' EXIT
-  read -rs -p 'Separate existing-repo Contents-read-only runtime PAT (masked): ' RuntimePat
+  printf '%s' 'Separate existing-repo Contents-read-only runtime PAT (masked): ' >&2
+  read -r -s RuntimePat
   printf '\n'
   flux create secret git flux-system --context "$SecondaryContext" -n flux-system \
     --url "$GitUrl" --username git --password "$RuntimePat"
@@ -440,20 +445,26 @@ If backend type is `nodeIP`, run `az aks update -g "$(lab_value ResourceGroup)" 
 Obtain two distinct owned origin DNS names and valid CA-issued full certificate chains/private keys. **Do not reuse `$(lab_value Hostname)` from lab 12:** its exact-name private DNS zone and apex A record intentionally resolve to the old internal Gateway and would shadow that name for VNet-connected clients. Use separate names such as `origin-primary.<owned-domain>` and `origin-secondary.<owned-domain>`; the Front Door client URL is the separate generated `azurefd.net` endpoint (or a separately configured custom domain). Origin DNS names need not expose public origins; they supply SNI/Host validation. The lab-12 self-signed certificate's local trust and 14-day lifetime do not make it publicly trusted by Front Door. `new-lab-certificate.sh` accepts `--hostname` and writes `rendered/certs/tls.crt` and `rendered/certs/tls.key`; those lab certificates are not suitable here. Keep the new CA-issued certificates in an excluded local folder.
 
 ```bash
-read -r -p 'CA-certified primary origin FQDN: ' PrimaryOriginHost
-read -r -p 'CA-certified secondary origin FQDN: ' SecondaryOriginHost
+printf '%s' 'CA-certified primary origin FQDN: ' >&2
+read -r PrimaryOriginHost
+printf '%s' 'CA-certified secondary origin FQDN: ' >&2
+read -r SecondaryOriginHost
 InternalHostname=$(jq -r '.Hostname // ""' <<< "$Lab")
 if [[ -z "$PrimaryOriginHost" || -z "$SecondaryOriginHost" ||
-      "${PrimaryOriginHost,,}" == "${SecondaryOriginHost,,}" ||
-      "${PrimaryOriginHost,,}" == "${InternalHostname,,}" ||
-      "${SecondaryOriginHost,,}" == "${InternalHostname,,}" ]]; then
+      "$(lowercase "$PrimaryOriginHost")" == "$(lowercase "$SecondaryOriginHost")" ||
+      "$(lowercase "$PrimaryOriginHost")" == "$(lowercase "$InternalHostname")" ||
+      "$(lowercase "$SecondaryOriginHost")" == "$(lowercase "$InternalHostname")" ]]; then
   printf 'Choose two distinct owned origin names, both different from the lab 12 private hostname.\n' >&2
   exit 1
 fi
-read -r -p 'Primary full-chain PEM path: ' PrimaryCert
-read -r -p 'Primary private-key PEM path: ' PrimaryKey
-read -r -p 'Secondary full-chain PEM path: ' SecondaryCert
-read -r -p 'Secondary private-key PEM path: ' SecondaryKey
+printf '%s' 'Primary full-chain PEM path: ' >&2
+read -r PrimaryCert
+printf '%s' 'Primary private-key PEM path: ' >&2
+read -r PrimaryKey
+printf '%s' 'Secondary full-chain PEM path: ' >&2
+read -r SecondaryCert
+printf '%s' 'Secondary private-key PEM path: ' >&2
+read -r SecondaryKey
 kubectl --context "$PrimaryContext" create secret tls regional-origin-tls -n orders --cert "$PrimaryCert" --key "$PrimaryKey" --dry-run=client -o yaml |
   kubectl --context "$PrimaryContext" apply -f -
 kubectl --context "$SecondaryContext" create secret tls regional-origin-tls -n orders --cert "$SecondaryCert" --key "$SecondaryKey" --dry-run=client -o yaml |
@@ -519,8 +530,10 @@ az network private-endpoint-connection list --id "$SecondaryPls" -o json
 The manifest uses PLS visibility `*` so the Front Door managed endpoint can request a connection across subscription boundaries; **visibility is not approval or public network access**. Automatic approval is deliberately absent. Inspect the requester's endpoint IDs/subscription and compare with the new Front Door profile's pending requests. **Approve only those exact two**, never loop over arbitrary pending connections:
 
 ```bash
-read -r -p 'Verified Front Door pending connection ARM ID on primary PLS: ' PrimaryConnectionId
-read -r -p 'Verified Front Door pending connection ARM ID on secondary PLS: ' SecondaryConnectionId
+printf '%s' 'Verified Front Door pending connection ARM ID on primary PLS: ' >&2
+read -r PrimaryConnectionId
+printf '%s' 'Verified Front Door pending connection ARM ID on secondary PLS: ' >&2
+read -r SecondaryConnectionId
 az network private-endpoint-connection approve --id "$PrimaryConnectionId" --description 'Reviewed Front Door lab origin'
 az network private-endpoint-connection approve --id "$SecondaryConnectionId" --description 'Reviewed Front Door lab origin'
 EdgeHost=$(az deployment group show -g "$(lab_value ResourceGroup)" -n frontdoor --query properties.outputs.endpointHost.value -o tsv)
@@ -743,7 +756,8 @@ Wait for backlog to drain and inspect database rows **before** enabling edge tra
 # Separate private-host terminal; leave this attached only for the verification period:
 set -euo pipefail
 source ./scripts/use-lab.sh
-read -r -p 'Recorded secondary kubeconfig context from task 1: ' SecondaryContext
+printf '%s' 'Recorded secondary kubeconfig context from task 1: ' >&2
+read -r SecondaryContext
 [[ -n "$SecondaryContext" ]] || { printf 'A recorded context is required.\n' >&2; exit 1; }
 kubectl --context "$SecondaryContext" port-forward -n orders service/order-api 18080:80 --address 127.0.0.1
 ```
@@ -865,11 +879,10 @@ bash ./ops/remove-gitops-file.sh --name primary-fence.yaml --namespace orders
 git add ./gitops/clusters/primary/apps/orders
 bash ./ops/publish-reviewed-change.sh --message "Return primary to the recovered database and remove writer fence"
 kubectl --context "$PrimaryContext" annotate scaledobject --all -n orders autoscaling.keda.sh/paused-replicas-
-mapfile -t IncidentOwners < ./.artifacts/advanced/incident-owners.txt
-for Owner in "${IncidentOwners[@]}"; do
+while IFS= read -r Owner || [[ -n "$Owner" ]]; do
   flux resume kustomization "$Owner" --context "$PrimaryContext" -n "$FluxNamespace"
   flux reconcile kustomization "$Owner" --context "$PrimaryContext" -n "$FluxNamespace" --with-source
-done
+done < ./.artifacts/advanced/incident-owners.txt
 kubectl --context "$PrimaryContext" get hpa order-api -n orders
 # Explicit one-time failback activation, not a permanent replica value in Git.
 # HPA does not awaken an API deliberately left at zero; do not assume removing a patch does so.

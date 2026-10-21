@@ -21,7 +21,7 @@ Use the [session, evidence and cost operating contract](../docs/operations.md), 
 
 **Use a new disposable cluster, resource group and two isolated VNets.** Do not source `use-lab.sh`, reuse cumulative settings, redeploy foundation, change the cumulative API, or connect these networks to corporate/shared networks. Labs 10 and 12 provide useful background but their deployments are not prerequisites. Lab 28 is not a prerequisite either; do not reuse its deliberately overlapping network.
 
-Run from the repository root in a fresh Linux Bash 5+ terminal, outside any Bastion session, with Azure CLI 2.90+, `jq`, Python 3.12+, OpenSSH, `kubectl` within one minor of the selected Kubernetes version, and `kubelogin`. Use Azure public cloud and the same Entra tenant for the cluster and probe identities. The operator needs deployment, VM Run Command, user-kubeconfig retrieval and scoped role-assignment permissions, plus membership in an existing approved Entra administrator group.
+Run from the repository root in a fresh Linux Bash 5+ or Zsh 5.9+ terminal, outside any Bastion session, after the [shell setup](../docs/operations.md#bash-and-zsh), with Azure CLI 2.90+, `jq`, Python 3.12+, OpenSSH, `kubectl` within one minor of the selected Kubernetes version, and `kubelogin`. Use Azure public cloud and the same Entra tenant for the cluster and probe identities. The operator needs deployment, VM Run Command, user-kubeconfig retrieval and scoped role-assignment permissions, plus membership in an existing approved Entra administrator group.
 
 Use a workstation with approved direct HTTPS egress, not an HTTP proxy, for the public before/after test. Keep its source IP and network unchanged during cutover; a newly blocked client network is not evidence that the API became private.
 
@@ -85,9 +85,12 @@ az vm list-usage --location "$Location" -o table
 for size in "$SystemVmSize" "$ProbeVmSize"; do
   az vm list-skus --location "$Location" --size "$size" --all -o json
 done
-read -r -p 'Exact supported GA Kubernetes patch: ' KubernetesVersion
-read -r -p 'Existing Entra administrator group object ID: ' AdminGroupObjectId
-read -r -p 'Approved workstation public egress IPv4 address with /32: ' OperatorCidr
+printf '%s' 'Exact supported GA Kubernetes patch: ' >&2
+read -r KubernetesVersion
+printf '%s' 'Existing Entra administrator group object ID: ' AdminGroupObjectId
+read -r AdminGroupObjectId
+printf '%s' 'Approved workstation public egress IPv4 address with /32: ' >&2
+read -r OperatorCidr
 [[ "$KubernetesVersion" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] ||
   { printf 'Supply a supported exact patch.\n' >&2; exit 1; }
 [[ "$AdminGroupObjectId" =~ ^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$ &&
@@ -128,7 +131,8 @@ The fresh shell uses an empty, lab-local Azure CLI extension directory with dyna
 <summary>Solution</summary>
 
 ```bash
-read -r -p "Type $ResourceGroup to approve this isolated billable experiment: " Approval
+printf '%s' "Type $ResourceGroup to approve this isolated billable experiment: " >&2
+read -r Approval
 [[ "$Approval" == "$ResourceGroup" ]] ||
   { printf 'Deployment not confirmed.\n' >&2; exit 1; }
 [[ $(az account show --query id -o tsv) == "$SubscriptionId" &&
@@ -431,7 +435,8 @@ Keep the workstation's approved egress/network unchanged for the before/after co
 
 ```bash
 assert_lab
-read -r -p "Type $ClusterName to disable ONLY this cluster's public API: " Approval
+printf '%s' "Type $ClusterName to disable ONLY this cluster's public API: " >&2
+read -r Approval
 [[ "$Approval" == "$ClusterName" ]] ||
   { printf 'Cutover not confirmed.\n' >&2; exit 1; }
 az aks update -g "$ResourceGroup" -n "$ClusterName" --enable-private-cluster -o none
@@ -578,7 +583,8 @@ From the original workstation, save intended evidence, confirm the group ownersh
 ```bash
 assert_lab
 az resource list -g "$ResourceGroup" --query '[].{name:name,type:type}' -o table
-read -r -p "Type $ResourceGroup to permanently delete ONLY this API experiment: " Approval
+printf '%s' "Type $ResourceGroup to permanently delete ONLY this API experiment: " >&2
+read -r Approval
 [[ "$Approval" == "$ResourceGroup" ]] ||
   { printf 'Cleanup not confirmed.\n' >&2; exit 1; }
 az group delete -n "$ResourceGroup" --yes

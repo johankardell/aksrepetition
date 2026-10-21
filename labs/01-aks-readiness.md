@@ -19,7 +19,7 @@ Use the [session, evidence and cost operating contract](../docs/operations.md) a
 
 ## Prerequisites and resource boundary
 
-Use a dedicated subscription and a Linux workstation with Bash 5+, Git, `jq`, Azure CLI 2.90+, Bicep and OpenSSH. Run commands from the repository root. You need resource deployment and role-assignment authority, plus membership in an existing Entra security group approved for cluster administration. Subscription ownership does not grant directory group-creation rights.
+Use a dedicated subscription and a Linux workstation with Bash 5+ or Zsh 5.9+, Git, `jq`, Azure CLI 2.90+, Bicep and OpenSSH. Run commands from the repository root after the [shell setup](../docs/operations.md#bash-and-zsh). You need resource deployment and role-assignment authority, plus membership in an existing Entra security group approved for cluster administration. Subscription ownership does not grant directory group-creation rights.
 
 No cluster is deployed in this lab. The [bootstrap contract](../docs/operations.md#bootstrap-configuration) creates a dedicated resource group and local key/configuration files. **Lab 2 deploys the whole enterprise foundation**, not a low-cost starter cluster: six AKS nodes, a private build VM, Bastion Standard, Azure Firewall Standard, Premium ACR and Service Bus, Key Vault and Log Analytics. Later beginner labs reuse these resources. Obtain approval for the complete footprint first; budgets are alerts, not spending caps.
 

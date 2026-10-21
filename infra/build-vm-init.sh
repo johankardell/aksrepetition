@@ -11,7 +11,7 @@ username=$(jq -er .username /etc/aks-lab/build-config.json)
 }
 minor=${kubernetes_version%.*}
 work=$(mktemp -d /var/tmp/aks-build-bootstrap.XXXXXX)
-trap 'rm -f -- "$work"/*; rmdir -- "$work"' EXIT
+trap 'Result=$?; find "$work" -mindepth 1 -maxdepth 1 -type f -delete || Result=$?; rmdir -- "$work" || Result=$?; exit "$Result"' EXIT
 mkdir -p /etc/apt/keyrings /var/lib/aks-lab
 curl --fail --silent --show-error --location --retry 5 https://packages.microsoft.com/keys/microsoft.asc \
     | gpg --dearmor --yes -o /etc/apt/keyrings/microsoft.gpg

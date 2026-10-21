@@ -1,7 +1,10 @@
 import base64
 import importlib.util
 import pathlib
+import re
+import shutil
 import subprocess
+import tempfile
 import unittest
 
 
@@ -38,6 +41,26 @@ class BuildVmTests(unittest.TestCase):
         self.assertIn('touch /var/lib/aks-lab/build-ready', script.splitlines()[-1])
         self.assertNotIn("az login", script)
         self.assertNotIn("apparmor_restrict_unprivileged_userns", script)
+
+    def test_bootstrap_cleanup_handles_empty_directory_and_preserves_failure(self):
+        script = (ROOT / "infra/build-vm-init.sh").read_text()
+        trap = re.search(r"^trap .+ EXIT$", script, re.M)[0]
+        for shell in ("bash", "zsh"):
+            if not shutil.which(shell):
+                continue
+            for populated in (False, True):
+                with self.subTest(shell=shell, populated=populated), tempfile.TemporaryDirectory() as root:
+                    work = pathlib.Path(root) / "bootstrap files"
+                    work.mkdir()
+                    if populated:
+                        (work / "download").write_text("synthetic")
+                        (work / ".partial").write_text("synthetic")
+                    result = subprocess.run(
+                        [shell, "-c", 'set -euo pipefail\nwork=$1\n' + trap + "\nexit 7",
+                         shell, str(work)], text=True, capture_output=True,
+                    )
+                    self.assertEqual(result.returncode, 7, result.stderr)
+                    self.assertFalse(work.exists())
 
     def test_egress_order_and_region_ranges_are_wired(self):
         foundation = (ROOT / "infra/main.bicep").read_text()

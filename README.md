@@ -118,6 +118,9 @@ Use the [operations handbook](docs/operations.md) for setup, sessions, trust, re
 and the [state/ownership map](docs/state.md) to know what each stage retains. Stable procedures
 live there; local safety gates and task-specific recovery remain beside the lab commands.
 
+Commands support **Bash 5+ or Zsh 5.9+**. Read the [shell setup and explicitly selected
+interpreter boundaries](docs/operations.md#bash-and-zsh), including interactive Zsh comments.
+
 ## Scope and readiness
 
 These are lab materials, **not a certified production landing zone**. Native Bastion AKS

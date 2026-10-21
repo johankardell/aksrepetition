@@ -16,7 +16,7 @@ Do not render the cumulative base or rerun GitOps initialization.
 
 ## 1. Approve the context and resource envelope before applying
 
-Use Linux, Bash 5+, Python 3.12+, `jq`, `kubectl` (with Kustomize) and GNU `timeout`,
+Use Linux, Bash 5+ or Zsh 5.9+, Python 3.12+, `jq`, `kubectl` (with Kustomize) and GNU `timeout`,
 from the repository root. Reuse the current verified native Bastion API session; never
 overwrite its kubeconfig with `get-credentials`. The kubelet still needs its existing
 private ACR connectivity and pull permission. Bastion is not an ACR/data-plane route.
@@ -32,7 +32,8 @@ Prepare and inspect locally first (the renderer never contacts a cluster):
 set -euo pipefail
 source ./scripts/use-lab.sh
 Registry=$(lab_value RegistryServer)
-read -r -p 'Approved existing ACR order-app@sha256 digest reference: ' Image
+printf '%s' 'Approved existing ACR order-app@sha256 digest reference: ' >&2
+read -r Image
 Work="$PWD/.artifacts/workload-reliability"
 python3 workshops/assets/reliability/render.py \
   --registry "$Registry" --image "$Image" --output "$Work"
@@ -79,7 +80,8 @@ kubectl auth can-i create namespaces
 kubectl auth can-i create deployments -n workload-reliability
 # Have the authorized operator approve capacity, permissions and the reviewed three manifests.
 printf 'Context: %s\nEnvelope: workload-reliability, 6 pods, 2 CPU / 768 MiB limits\n' "$Context"
-read -r -p "Type '$Context workload-reliability approved' after approval: " Approval
+printf '%s' "Type '$Context workload-reliability approved' after approval: " >&2
+read -r Approval
 [[ "$Approval" == "$Context workload-reliability approved" ]] || exit 1
 [[ "$(kubectl config current-context)" == "$Context" ]] || exit 1
 ws() {
@@ -245,7 +247,8 @@ to the existing v1 pods so deletion does not erase their last lifecycle messages
 
 ```bash
 set -euo pipefail
-read -r -p 'Exact approved context from the first terminal: ' Context
+printf '%s' 'Exact approved context from the first terminal: ' >&2
+read -r Context
 [[ "$(kubectl config current-context)" == "$Context" ]] || exit 1
 mkdir -p .artifacts/workload-reliability
 if timeout 100s kubectl --context="$Context" -n workload-reliability logs \
@@ -328,7 +331,8 @@ if [[ -n "$Existing" ]]; then
     -o jsonpath='{.metadata.labels.workshops\.aksrepetition/run}')
   [[ "$Owner" == workload-reliability && "$ActualRun" == "$Run" ]] ||
     { echo 'Owner/run mismatch: stop; this is not your namespace.' >&2; exit 1; }
-  read -r -p "Type '$Context workload-reliability delete' to delete only this namespace: " Approval
+  printf '%s' "Type '$Context workload-reliability delete' to delete only this namespace: " >&2
+  read -r Approval
   [[ "$Approval" == "$Context workload-reliability delete" ]] || exit 1
   ws delete namespace workload-reliability --wait=true --timeout=120s
 fi

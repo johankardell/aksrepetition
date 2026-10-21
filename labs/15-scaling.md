@@ -178,7 +178,8 @@ Flux must no longer reconcile `spec.replicas`. Watch after several reconciliatio
 Use the real HTTPS application URL from Lab 12:
 
 ```bash
-read -r -p 'Trusted HTTPS application URL: ' UserUri
+printf '%s' 'Trusted HTTPS application URL: ' >&2
+read -r UserUri
 UserUri=${UserUri%/}
 [[ "$UserUri" == https://* ]] || { printf '%s\n' 'Use the trusted HTTPS application URL.' >&2; exit 1; }
 BeforeApi=$(kubectl -n orders get deployment order-api -o 'jsonpath={.spec.replicas}')
@@ -351,12 +352,13 @@ Use the shared [duplicate and restart evidence contract](../docs/operations.md#d
 <details>
 <summary>Solution</summary>
 
-Use a single paused worker to make the in-memory boundary deterministic. Run this directive's blocks in one dedicated Bash terminal, including cleanup before closing it. The exit/signal traps attempt recovery if a command fails or the session is interrupted; forced termination or host loss still requires the explicit re-entry cleanup. KEDA's pause annotation, not a second hand-written HPA, sets one replica:
+Use a single paused worker to make the in-memory boundary deterministic. Run this directive's blocks in one dedicated Bash or Zsh terminal, including cleanup before closing it. The exit/signal traps attempt recovery if a command fails or the session is interrupted; forced termination or host loss still requires the explicit re-entry cleanup. KEDA's pause annotation, not a second hand-written HPA, sets one replica:
 
 ```bash
 set -euo pipefail
 source ./scripts/use-lab.sh
-read -r -p 'Trusted HTTPS application URL: ' UserUri
+printf '%s' 'Trusted HTTPS application URL: ' >&2
+read -r UserUri
 UserUri=${UserUri%/}
 [[ "$UserUri" == https://* ]] || { printf '%s\n' 'Use the trusted HTTPS application URL.' >&2; exit 1; }
 flux suspend kustomization orders

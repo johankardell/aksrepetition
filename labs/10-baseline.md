@@ -31,7 +31,7 @@ For this resume path, complete directive 1, directive 2's discovery/review (not 
 
 For a fresh start, complete the [bootstrap configuration](../docs/operations.md#bootstrap-configuration); beginner graduates retain their existing configuration. Have a Linux workstation for Bastion access. Foundation supplies a private Ubuntu build VM and peered Azure Firewall for the later data-plane tasks, without a VPN or VM public IP. Confirm spending for six worker VMs, the small build VM, AKS Standard tier, ACR Premium, Service Bus Premium, Log Analytics, **Bastion Standard with two scale units/public IP**, and **Azure Firewall Standard/public IP from foundation deployment onward (lab 2 or a fresh lab 10)**. Check at least 24 node vCPUs plus surge headroom and the build VM's additional two B-series vCPUs. Use only the dedicated resource group.
 
-Files: `infra/main.bicep`, `infra/bastion.bicep`, `infra/workload-identities.bicep`, `scripts/deploy-foundation.sh`, `scripts/activate-aks-bastion.sh`, `scripts/connect-aks-bastion.sh`, `app/`, `k8s/base/`. Run these solutions in Bash on Linux at the repository root, with Azure CLI 2.90+, jq, kubectl, kubelogin, Podman, dig, getent, OpenSSL and curl installed.
+Files: `infra/main.bicep`, `infra/bastion.bicep`, `infra/workload-identities.bicep`, `scripts/deploy-foundation.sh`, `scripts/activate-aks-bastion.sh`, `scripts/connect-aks-bastion.sh`, `app/`, `k8s/base/`. Run these solutions in Bash 5+ or Zsh 5.9+ on Linux at the repository root after the [shell setup](../docs/operations.md#bash-and-zsh), with Azure CLI 2.90+, jq, kubectl, kubelogin, Podman, dig, getent, OpenSSL and curl installed.
 
 Keep strict mode enabled for the following solutions. `use-lab.sh` supplies `Lab` and `Outputs` as JSON strings, `Root` as the absolute repository root, `lab_value KEY` for a settings value, and `output_value KEY` for a foundation output's `.value`. Deployment-derived resource names must be populated by that helper, not guessed. Execute other helpers with `bash ./path/name.sh` and their named `--kebab-case` options.
 
@@ -248,7 +248,7 @@ kubectl get pdb -n orders
 
 Use a unique image tag if repeating the build. Lab 13 replaces mutable lab tags with immutable references. ACR has no admin password; kubelet pulls use its own managed identity, not your human login.
 
-In a separate Bash terminal on the same host, export the exact active tunnel `KUBECONFIG` first:
+In a separate Bash or Zsh terminal on the same host, export the exact active tunnel `KUBECONFIG` first:
 
 ```bash
 kubectl port-forward -n orders service/order-api 8080:80

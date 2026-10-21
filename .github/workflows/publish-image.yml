@@ -62,7 +62,7 @@ jobs:
           REGISTRY: ${{ vars.REGISTRY_SERVER }}
         run: |
           set -euo pipefail
-          status=0
-          podman logout "$REGISTRY" || status=$?
-          az logout || status=$?
-          exit "$status"
+          Result=0
+          podman logout "$REGISTRY" || Result=$?
+          az logout || Result=$?
+          exit "$Result"

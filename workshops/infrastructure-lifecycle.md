@@ -5,7 +5,7 @@
 | Field | Contract |
 |---|---|
 | Entry | Lab 22's lifecycle decisions; understand the [state map](../docs/state.md). Offline fixture path needs no Azure environment. |
-| Host and identity | Linux, Bash, jq, Python, Git; optional live inventory uses only approved Azure/Kubernetes read access. |
+| Host and identity | Linux, Bash or Zsh, jq, Python, Git; optional live inventory uses only approved Azure/Kubernetes read access. |
 | Time | 60-90 minutes active; optional export may take minutes. No provisioning wait on the required path. |
 | Cost | No additional Azure resources. Existing resources still bill if using the live inventory path. |
 | Changes | Ignored local state projection and replacement runbook only; no template application, upgrade, deletion or network change. |

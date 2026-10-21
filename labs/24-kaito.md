@@ -435,7 +435,8 @@ fi
 For **each** positively identified lab GPU pool, execute this block individually. It deliberately refuses a baseline pool or an unreviewed SKU:
 
 ```bash
-read -r -p 'Exact verified lab GPU pool name to delete: ' DeletePool
+printf '%s' 'Exact verified lab GPU pool name to delete: ' >&2
+read -r DeletePool
 if [[ -z "$DeletePool" ]] || jq -e --arg pool "$DeletePool" 'any(.[]; .name == $pool)' <<< "$BeforePools" > /dev/null; then
   printf 'Refusing an empty or baseline pool name.\n' >&2
   exit 1
@@ -444,7 +445,8 @@ Candidate=$(jq --arg pool "$DeletePool" '[.[] | select(.name == $pool)]' <<< "$N
 jq -e 'length == 1 and .[0].vmSize == "Standard_NC24ads_A100_v4"' <<< "$Candidate" > /dev/null ||
   { printf 'Pool does not match the reviewed new GPU inventory; investigate before deletion.\n' >&2; exit 1; }
 az aks nodepool show -g "$(lab_value ResourceGroup)" --cluster-name "$(lab_value ClusterName)" -n "$DeletePool" -o json
-read -r -p "Type $DeletePool to confirm deletion after verifying ownership: " ConfirmPool
+printf '%s' "Type $DeletePool to confirm deletion after verifying ownership: " >&2
+read -r ConfirmPool
 [[ "$ConfirmPool" == "$DeletePool" ]] || { printf 'Deletion not confirmed.\n' >&2; exit 1; }
 az aks nodepool delete -g "$(lab_value ResourceGroup)" --cluster-name "$(lab_value ClusterName)" -n "$DeletePool"
 ```
@@ -474,7 +476,8 @@ Only after Workspace/pool cleanup, delete the lab namespace. If this exercise ne
 if [[ -n "$HasWorkspaceApi" ]]; then kubectl get workspaces.kaito.sh -A; fi
 if [[ -n "$HasNamespace" ]]; then kubectl delete namespace kaito-lab --wait=true --timeout=180s; fi
 # Only if the pre-change record shows the add-on was absent and no other owner uses it:
-read -r -p 'Type DISABLE only if the baseline was disabled and no other owner uses KAITO (otherwise RETAIN): ' AddonDisposition
+printf '%s' 'Type DISABLE only if the baseline was disabled and no other owner uses KAITO (otherwise RETAIN): ' >&2
+read -r AddonDisposition
 case "$AddonDisposition" in
   DISABLE) az aks update -g "$(lab_value ResourceGroup)" -n "$(lab_value ClusterName)" --disable-ai-toolchain-operator ;;
   RETAIN) printf 'Managed add-on retained with platform-owner agreement.\n' ;;
@@ -490,7 +493,8 @@ flux get kustomizations -A
 kubectl -n orders get deployments,hpa,scaledobjects
 kubectl -n orders describe scaledobject order-worker
 az aks nodepool list -g "$(lab_value ResourceGroup)" --cluster-name "$(lab_value ClusterName)" -o table
-read -r -p 'Currently active trusted orders HTTPS URL: Lab 12 private or Lab 23 edge: ' OrdersUri
+printf '%s' 'Currently active trusted orders HTTPS URL: Lab 12 private or Lab 23 edge: ' >&2
+read -r OrdersUri
 OrdersUri="${OrdersUri%/}"
 [[ "$OrdersUri" == https://* ]] || { printf 'Supply the trusted HTTPS URL.\n' >&2; exit 1; }
 curl --fail-with-body --max-time 30 "$OrdersUri/readyz"

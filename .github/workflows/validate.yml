@@ -51,7 +51,7 @@ jobs:
           for source in k8s/base advanced/governance advanced/storage; do
             kubectl kustomize "$source" >/dev/null
           done
-          for script in scripts/*.sh ops/*.sh advanced/*.sh; do
+          for script in scripts/*.sh ops/*.sh advanced/*.sh infra/*.sh; do
             bash -n "$script"
             zsh -n "$script"
           done

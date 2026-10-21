@@ -19,7 +19,7 @@ Use the [session, evidence and cost operating contract](../docs/operations.md) a
 
 ## Prerequisites and resource boundary
 
-Complete [lab 1](01-aks-readiness.md). Run from the repository root on the original Linux bootstrap workstation in Bash with Azure CLI/Bicep, `jq` and the local settings/key pairs. The operator needs deployment and role-assignment authority.
+Complete [lab 1](01-aks-readiness.md). Run from the repository root on the original Linux bootstrap workstation in Bash or Zsh with Azure CLI/Bicep, `jq` and the local settings/key pairs. The operator needs deployment and role-assignment authority.
 
 **Billable:** this is where the entire [foundation cost inventory](../docs/operations.md#before-spending-anything) starts. Six nodes, Bastion, Firewall, the build VM and Premium dependencies are created together. Do not apply until approved. There is no smaller beginner template.
 

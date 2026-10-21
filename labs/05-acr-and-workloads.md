@@ -116,7 +116,7 @@ The worker has no HTTP readiness probe. Running/Ready status alone does not prov
 <details>
 <summary>Solution</summary>
 
-Open a second Bash terminal on the **same VM**. Copy the active owner's exact temporary kubeconfig path using the [shared-session recipe](../docs/operations.md#bastion-sessions-and-data-plane-access), verify context, then run:
+Open a second Bash or Zsh terminal on the **same VM**. Copy the active owner's exact temporary kubeconfig path using the [shared-session recipe](../docs/operations.md#bastion-sessions-and-data-plane-access), verify context, then run:
 
 ```bash
 kubectl config current-context

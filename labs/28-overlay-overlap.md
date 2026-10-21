@@ -21,7 +21,7 @@ Use the [session, evidence and cost operating contract](../docs/operations.md), 
 
 **This deliberately creates an unsupported network design. Use a new disposable resource group and isolated VNets only.** Never peer this experiment with the cumulative foundation, corporate networks, VPN/ExpressRoute, shared DNS or another cluster. Do not change the existing labs' pod CIDR or infrastructure. The ordinary rule remains: pod, Service and connected external address spaces must not overlap.
 
-Use Linux Bash 5+, Python 3.12+, Azure CLI 2.90+, Bicep, `jq`, OpenSSH, `kubectl` within one minor of the selected API version, and `kubelogin`. Run from the repository root in a **fresh terminal outside any existing Bastion session**. The operator needs resource deployment, Azure Run Command and scoped role-assignment authority, plus membership in an existing Entra administrator group.
+Use Linux Bash 5+ or Zsh 5.9+, Python 3.12+, Azure CLI 2.90+, Bicep, `jq`, OpenSSH, `kubectl` within one minor of the selected API version, and `kubelogin`. Follow the [shell setup](../docs/operations.md#bash-and-zsh) and run from the repository root in a **fresh terminal outside any existing Bastion session**. The operator needs resource deployment, Azure Run Command and scoped role-assignment authority, plus membership in an existing Entra administrator group.
 
 Budget for two AKS nodes, two small Ubuntu VMs with managed disks, AKS Standard tier, one Standard NAT Gateway/public IP, Bastion Standard with two scale units/public IP, and peering traffic. Default compute is eight D-family node vCPUs plus four B-series VM vCPUs; check regional/family quota and surge headroom. Approve an allocation deadline and cleanup owner before starting. Closing a terminal or deallocating one VM does not stop the other charges.
 
@@ -76,8 +76,10 @@ az vm list-usage --location "$Location" -o table
 for size in "$SystemVmSize" "$TestVmSize"; do
   az vm list-skus --location "$Location" --size "$size" --all -o json
 done
-read -r -p 'Exact supported GA Kubernetes patch: ' KubernetesVersion
-read -r -p 'Existing Entra administrator group object ID: ' AdminGroupObjectId
+printf '%s' 'Exact supported GA Kubernetes patch: ' >&2
+read -r KubernetesVersion
+printf '%s' 'Existing Entra administrator group object ID: ' >&2
+read -r AdminGroupObjectId
 [[ "$KubernetesVersion" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] ||
   { printf 'Supply a supported exact patch.\n' >&2; exit 1; }
 [[ "$AdminGroupObjectId" =~ ^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$ &&
@@ -113,7 +115,8 @@ Review SKU restrictions, supported Azure Linux 3 versions and the actual prices.
 Approve the full billable inventory before the first create:
 
 ```bash
-read -r -p "Type $ResourceGroup to approve this isolated billable experiment: " Approval
+printf '%s' "Type $ResourceGroup to approve this isolated billable experiment: " >&2
+read -r Approval
 [[ "$Approval" == "$ResourceGroup" ]] ||
   { printf 'Deployment not confirmed.\n' >&2; exit 1; }
 [[ $(az account show --query id -o tsv) == "$SubscriptionId" ]] ||
@@ -505,7 +508,8 @@ This operation deliberately interrupts the disposable server. Confirm its exact 
 assert_probe_identity
 [[ $(az vm show -g "$ResourceGroup" -n overlap-service --query vmId -o tsv) == "$ServiceVmId" ]] ||
   { printf 'Service VM identity changed; stop.\n' >&2; exit 1; }
-read -r -p "Type $ResourceGroup to interrupt and renumber only this lab service: " Approval
+printf '%s' "Type $ResourceGroup to interrupt and renumber only this lab service: " >&2
+read -r Approval
 [[ "$Approval" == "$ResourceGroup" ]] ||
   { printf 'Recovery change not confirmed.\n' >&2; exit 1; }
 az vm deallocate -g "$ResourceGroup" -n overlap-service
@@ -592,7 +596,8 @@ if [[ -n ${AKS_BASTION_PID:-} ]]; then
 fi
 assert_lab
 az resource list -g "$ResourceGroup" --query '[].{name:name,type:type}' -o table
-read -r -p "Type $ResourceGroup to permanently delete ONLY this overlap experiment: " Approval
+printf '%s' "Type $ResourceGroup to permanently delete ONLY this overlap experiment: " >&2
+read -r Approval
 [[ "$Approval" == "$ResourceGroup" ]] ||
   { printf 'Cleanup not confirmed.\n' >&2; exit 1; }
 az group delete -n "$ResourceGroup" --yes

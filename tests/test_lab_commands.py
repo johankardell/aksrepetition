@@ -2,6 +2,7 @@ import json
 import os
 import pathlib
 import re
+import shlex
 import shutil
 import subprocess
 import tempfile
@@ -19,6 +20,7 @@ GUIDES = [
 
 
 class LabCommandsTests(unittest.TestCase):
+    shell = "bash"
     def test_curriculum_inventory_and_navigation(self):
         guides = sorted((ROOT / "labs").glob("*.md"))
         expected = [*range(1, 7), *range(10, 16), *range(20, 30)]
@@ -112,12 +114,12 @@ class LabCommandsTests(unittest.TestCase):
             raise AssertionError(f"Expected one Bash block containing {marker!r} in {guide}")
         return matches[0]
 
-    def test_bash_examples_parse_without_execution(self):
+    def test_shell_examples_parse_without_execution(self):
         for guide in GUIDES:
             for block in re.finditer(r"^```bash\n(.*?)^```", guide.read_text(), re.M | re.S):
                 line = guide.read_text()[:block.start()].count("\n") + 1
                 with self.subTest(guide=guide.relative_to(ROOT), line=line):
-                    result = subprocess.run(["bash", "-n"], input=block[1],
+                    result = subprocess.run([self.shell, "-n"], input=block[1],
                                             text=True, capture_output=True)
                     self.assertEqual(result.returncode, 0, result.stderr)
 
@@ -127,12 +129,87 @@ class LabCommandsTests(unittest.TestCase):
                 with self.subTest(guide=guide.relative_to(ROOT)):
                     compile(block, str(guide), "exec")
 
+    def test_documented_prompts_preserve_literal_input(self):
+        value = r"synthetic\token with spaces"
+        for guide in GUIDES:
+            for block in re.findall(r"^```bash\n(.*?)^```", guide.read_text(), re.M | re.S):
+                for line in block.splitlines():
+                    if not re.match(r"^\s*read -", line) or "<" in line:
+                        continue
+                    variable = shlex.split(line)[-1]
+                    self.assertRegex(variable, r"^[A-Za-z_][A-Za-z0-9_]*$")
+                    with self.subTest(guide=guide.name, read=line):
+                        script = ('set -eu\nContext=test-context\nResourceGroup=test-rg\n'
+                                  'Work=test-folder\nDeletePool=test-pool\nClusterName=test-cluster\n'
+                                  + line + f'\nprintf "%s" "${variable}"\n')
+                        result = subprocess.run([self.shell, "-c", script], input=value + "\n",
+                                                text=True, capture_output=True)
+                        self.assertEqual(result.returncode, 0, result.stderr)
+                        self.assertEqual(result.stdout, value)
+                        self.assertNotIn(value, result.stderr)
+
+    def test_psa_version_uses_the_cluster_minor_without_shell_capture_arrays(self):
+        block = self.bash_block("labs/20-governance.md", "PsaVersion=")
+        script = ('set -euo pipefail\naz() { printf "%s\\n" "$VersionInput"; }\n'
+                  'lab_value() { printf synthetic; }\n'
+                  + block.split("python3 -", 1)[0] + '\nprintf "%s" "$PsaVersion"\n')
+        for version, expected in (("1.34.12", "v1.34"), ("invalid", None)):
+            with self.subTest(version=version):
+                result = subprocess.run([self.shell, "-c", script],
+                                        env={**os.environ, "VersionInput": version},
+                                        text=True, capture_output=True)
+                self.assertEqual(result.returncode == 0, expected is not None, result.stderr)
+                if expected:
+                    self.assertEqual(result.stdout, expected)
+
+    def test_image_artifact_requires_one_exact_reference(self):
+        block = self.bash_block("labs/13-gitops.md", "ReferencePaths=$(find")
+        script = ('set -euo pipefail\ngh() { :; }\n'
+                  'lab_value() { printf test.azurecr.io; }\nGitHubRepository=test/repo\n' + block)
+        image = "test.azurecr.io/order-app@sha256:" + "a" * 64
+        for count in (0, 1, 2):
+            with self.subTest(count=count), tempfile.TemporaryDirectory() as directory:
+                folder = pathlib.Path(directory) / ".artifacts/image/17"
+                folder.mkdir(parents=True)
+                for number in range(count):
+                    artifact = folder / f"release {number}"
+                    artifact.mkdir()
+                    (artifact / "image-reference.txt").write_text(image + "\n")
+                result = subprocess.run([self.shell, "-c", script], cwd=directory, input="17\n",
+                                        text=True, capture_output=True)
+                self.assertEqual(result.returncode == 0, count == 1, result.stderr)
+                if count == 1:
+                    self.assertEqual(result.stdout.strip(), image)
+                else:
+                    self.assertIn("Expected exactly one image-reference.txt", result.stderr)
+
+    def test_files_evidence_uses_two_distinct_readers(self):
+        block = self.bash_block("labs/21-data-recovery.md", "ReaderPods=$(kubectl")
+        mock = '''set -euo pipefail
+kubectl() {
+  if [[ $1 == get ]]; then printf '%s' "$ReaderData"
+  elif [[ $1 == exec ]]; then printf '%s\\n' "$4"
+  fi
+}
+'''
+        for count in (1, 2):
+            with self.subTest(count=count):
+                pods = {"items": [{"metadata": {"name": f"reader-{n}"}} for n in range(count)]}
+                result = subprocess.run([self.shell, "-c", mock + block],
+                                        env={**os.environ, "ReaderData": json.dumps(pods)},
+                                        text=True, capture_output=True)
+                self.assertEqual(result.returncode == 0, count == 2, result.stderr)
+                if count == 2:
+                    self.assertEqual(result.stdout.splitlines(), ["reader-0", "reader-1"])
+                else:
+                    self.assertIn("Expected two Files readers", result.stderr)
+
     def test_offline_lifecycle_rehearsal_detects_replayed_network_state(self):
         guide = "workshops/infrastructure-lifecycle.md"
         script = self.bash_block(guide, "cat > .artifacts/lifecycle/bootstrap.json")
         script += "\n" + self.bash_block(guide, "cat > .artifacts/lifecycle/desired.json")
         with tempfile.TemporaryDirectory() as directory:
-            result = subprocess.run(["bash", "-c", script], cwd=directory,
+            result = subprocess.run([self.shell, "-c", script], cwd=directory,
                                     text=True, capture_output=True)
             self.assertEqual(result.returncode, 0, result.stderr)
             self.assertIn('-  "outboundType": "loadBalancer"', result.stdout)
@@ -149,7 +226,7 @@ class LabCommandsTests(unittest.TestCase):
             root = pathlib.Path(directory)
             (root / "ops").symlink_to(ROOT / "ops", target_is_directory=True)
             (root / "tests").symlink_to(ROOT / "tests", target_is_directory=True)
-            result = subprocess.run(["bash", "-c", script], cwd=directory,
+            result = subprocess.run([self.shell, "-c", script], cwd=directory,
                                     text=True, capture_output=True)
             self.assertEqual(result.returncode, 0, result.stderr)
             self.assertIn('"allowed": true', result.stdout)
@@ -186,7 +263,7 @@ class LabCommandsTests(unittest.TestCase):
                     config = {"clusters": [{"cluster": cluster}],
                               "users": [{"user": {"exec": {"command": authentication}}}]}
                     script = 'fqdn=test.private.azmk8s.io\nTunnelConfig=$(cat)\n' + check
-                    result = subprocess.run(["bash", "-c", script], input=json.dumps(config),
+                    result = subprocess.run([self.shell, "-c", script], input=json.dumps(config),
                                             text=True, capture_output=True)
                     self.assertEqual(result.returncode == 0, valid, result.stderr)
 
@@ -200,7 +277,7 @@ class LabCommandsTests(unittest.TestCase):
                     if existing:
                         base.mkdir(parents=True)
                         (base / "identity-patch.yaml").write_text("preserve me\n")
-                    result = subprocess.run(["bash", "-c", guard], cwd=directory,
+                    result = subprocess.run([self.shell, "-c", guard], cwd=directory,
                                             text=True, capture_output=True)
                     self.assertEqual(result.returncode == 0, not existing)
                     if existing:
@@ -248,7 +325,7 @@ elif args[:2] == ["get", "events"] and mode == "diagnostic-failure":
                     calls_path.write_text("")
                     env = dict(os.environ, PATH=f"{binary}:{os.environ['PATH']}",
                                MODE=mode, CALLS=str(calls_path))
-                    result = subprocess.run(["bash", "-c", block], env=env,
+                    result = subprocess.run([self.shell, "-c", block], env=env,
                                             text=True, capture_output=True, timeout=10)
                     self.assertEqual(result.returncode == 0, mode == "expected", result.stderr)
                     if mode == "diagnostic-failure":
@@ -354,7 +431,7 @@ else:
                                    MODE=mode, EVIDENCE=evidence)
                         script = ('set -euo pipefail\nworkerPod=synthetic-pod\ncheck=synthetic-check\n'
                                   + block + '\nprintf "SESSION_PRESERVED\\n"\n')
-                        result = subprocess.run(["bash", "-c", script], env=env,
+                        result = subprocess.run([self.shell, "-c", script], env=env,
                                                 text=True, capture_output=True)
                         if mode == "expected":
                             self.assertEqual(result.returncode, 0, result.stderr)
@@ -396,7 +473,7 @@ elif args[0] == "logs":
                     env = dict(os.environ, PATH=f"{binary}:{os.environ['PATH']}",
                                CALLS=str(calls_path), DIAGNOSTIC_STATUS=str(status))
                     script = 'set -euo pipefail\nlab_value() { printf "synthetic"; }\n' + block
-                    result = subprocess.run(["bash", "-c", script], env=env,
+                    result = subprocess.run([self.shell, "-c", script], env=env,
                                             text=True, capture_output=True)
                     self.assertEqual(result.returncode, status, result.stderr)
                     calls = [json.loads(line) for line in calls_path.read_text().splitlines()]
@@ -429,7 +506,7 @@ with pathlib.Path("calls.jsonl").open("a") as file:
                 path.write_text("#!/usr/bin/env bash\nprintf 'yes\\n'\n")
                 path.chmod(0o755)
             env = dict(os.environ, PATH=f"{root}:{os.environ['PATH']}")
-            result = subprocess.run(["bash", "-c", block], cwd=root, env=env,
+            result = subprocess.run([self.shell, "-c", block], cwd=root, env=env,
                                     input="/subscriptions/synthetic/resourceGroups/synthetic-rg/providers/Microsoft.Network/bastionHosts/synthetic-bastion\n",
                                     text=True, capture_output=True)
             self.assertEqual(result.returncode, 0, result.stderr)
@@ -456,7 +533,7 @@ with pathlib.Path("calls.jsonl").open("a") as file:
             date.write_text("#!/usr/bin/env bash\nprintf '2026-09-24T08:05:00Z\\n'\n")
             date.chmod(0o755)
             env = dict(os.environ, PATH=f"{root}:{os.environ['PATH']}")
-            result = subprocess.run(["bash", "-c", "set -euo pipefail\n" + block],
+            result = subprocess.run([self.shell, "-c", "set -euo pipefail\n" + block],
                                     cwd=root, env=env, text=True, capture_output=True)
             self.assertEqual(result.returncode, 0, result.stderr)
             report, _ = json.JSONDecoder().raw_decode(result.stdout)
@@ -474,7 +551,7 @@ with pathlib.Path("calls.jsonl").open("a") as file:
                 with self.subTest(guide=guide.relative_to(ROOT), script=path):
                     self.assertEqual(path, path.lower())
                     self.assertTrue((ROOT / path).is_file(), f"Missing helper: {path}")
-        for directory in ("scripts", "ops", "advanced"):
+        for directory in ("scripts", "ops", "advanced", "infra"):
             for path in (ROOT / directory).glob("*.sh"):
                 self.assertEqual(path.name, path.name.lower())
             self.assertEqual(list((ROOT / directory).glob("*.ps1")), [])
@@ -485,7 +562,7 @@ with pathlib.Path("calls.jsonl").open("a") as file:
                 self.assertNotRegex(path.read_text(), r"(?i)```powershell|\.ps1\b|\bpwsh\b|\$env:")
 
     def test_scripts_and_embedded_python_parse_without_execution(self):
-        for directory in ("scripts", "ops", "advanced"):
+        for directory in ("scripts", "ops", "advanced", "infra"):
             for path in (ROOT / directory).glob("*.sh"):
                 with self.subTest(script=path.relative_to(ROOT)):
                     for shell in ("bash", "zsh"):
@@ -515,6 +592,11 @@ with pathlib.Path("calls.jsonl").open("a") as file:
         publishing = (ROOT / ".github/workflows/publish-image.yml").read_text()
         self.assertIn("runs-on: [self-hosted, Linux, X64, aks-private]", publishing)
         self.assertNotIn("pull_request:", publishing)
+
+
+@unittest.skipUnless(shutil.which("zsh"), "Zsh is not installed")
+class ZshLabCommandsTests(LabCommandsTests):
+    shell = "zsh"
 
 
 if __name__ == "__main__":

@@ -101,10 +101,12 @@ test -z "$(git status --porcelain)"
 AuthSourceCommit=$(git rev-parse HEAD)
 git show "$AuthSourceCommit":app/authentication.py >/dev/null
 git show "$AuthSourceCommit":app/Containerfile | grep -Fx 'COPY app.py authentication.py .'
-read -r -p 'Existing private GitHub repository (owner/name): ' GitHubRepository
+printf '%s' 'Existing private GitHub repository (owner/name): ' >&2
+read -r GitHubRepository
 gh workflow run publish-image.yml --repo "$GitHubRepository" --ref main
 gh run list --repo "$GitHubRepository" --workflow publish-image.yml --limit 5
-read -r -p 'Publishing run ID for the reviewed source commit: ' AuthRunId
+printf '%s' 'Publishing run ID for the reviewed source commit: ' >&2
+read -r AuthRunId
 [[ "$AuthRunId" =~ ^[0-9]+$ ]]
 gh run watch "$AuthRunId" --repo "$GitHubRepository" --exit-status
 gh run view "$AuthRunId" --repo "$GitHubRepository" \
@@ -133,10 +135,13 @@ git status --short
 # Start from a clean, reviewed main checkout with initialized GitOps sources.
 kubectl kustomize gitops/clusters/primary/apps/orders-test >/dev/null
 PrimaryBefore=$(git rev-parse HEAD:gitops/clusters/primary/apps/orders)
-read -r -p 'Previous orders-test image digest (sha256:...; record for restore): ' PreviousDigest
+printf '%s' 'Previous orders-test image digest (sha256:...; record for restore): ' >&2
+read -r PreviousDigest
 : "${AuthDigest:?Complete the reviewed source/run/artifact checks before test-only promotion}"
-read -r -p 'Approved directory tenant UUID: ' AuthTenant
-read -r -p 'API application client-ID UUID: ' AuthAudience
+printf '%s' 'Approved directory tenant UUID: ' >&2
+read -r AuthTenant
+printf '%s' 'API application client-ID UUID: ' >&2
+read -r AuthAudience
 export AuthTenant AuthAudience
 mkdir -p .artifacts/authentication
 python3 - <<'PY'
@@ -206,9 +211,12 @@ Check its printed target, and ensure no stale tunnel owns port 18080. Never use 
 
 ```bash
 source .venv/bin/activate
-read -r -p 'Approved tenant UUID: ' AuthTenant
-read -r -p 'API application client-ID UUID: ' AuthAudience
-read -r -p 'Read-only public client-ID UUID: ' ReadClient
+printf '%s' 'Approved tenant UUID: ' >&2
+read -r AuthTenant
+printf '%s' 'API application client-ID UUID: ' >&2
+read -r AuthAudience
+printf '%s' 'Read-only public client-ID UUID: ' >&2
+read -r ReadClient
 python3 ops/authentication/probe.py \
   --tenant-id "$AuthTenant" --api-client-id "$AuthAudience" --client-id "$ReadClient"
 ```
@@ -222,7 +230,8 @@ Only after that gate does the helper attempt the read-only `/orders` write, expe
 **Optional live mutation:** only with the distinct approved writer client, explicit approval to use the lab's `orders-test` queue, and confirmation of the API's `QUEUE_NAME=orders-test` plus the distinct test identities:
 
 ```bash
-read -r -p 'Separate approved writer public client-ID UUID: ' WriteClient
+printf '%s' 'Separate approved writer public client-ID UUID: ' >&2
+read -r WriteClient
 python3 ops/authentication/probe.py --write \
   --tenant-id "$AuthTenant" --api-client-id "$AuthAudience" --client-id "$WriteClient"
 kubectl logs -n orders-test deployment/order-worker --since=5m

@@ -6,6 +6,7 @@ import json
 import os
 import pathlib
 import re
+import shutil
 import socket
 import ssl
 import subprocess
@@ -29,9 +30,11 @@ def bash_block(guide, marker):
 
 
 class OptionalLabsTests(unittest.TestCase):
-    def run_bash(self, script, **environment):
+    shell = "bash"
+
+    def run_shell(self, script, **environment):
         return subprocess.run(
-            ["bash", "-c", "set -euo pipefail\n" + script],
+            [self.shell, "-c", "set -euo pipefail\n" + script],
             env={**os.environ, **environment}, text=True, capture_output=True,
             timeout=10,
         )
@@ -43,7 +46,7 @@ class OptionalLabsTests(unittest.TestCase):
             guard = block[block.index("GroupExists=$("):block.index("\nprintf 'SubscriptionId=")]
             for exists, status in (("false", "0"), ("true", "0"), ("", "22"), ("false", "22")):
                 with self.subTest(guide=guide, exists=exists, status=status):
-                    result = self.run_bash(
+                    result = self.run_shell(
                         'az() { printf "%s" "$Exists"; return "$Status"; }\n' + guard,
                         Exists=exists, Status=status, ResourceGroup="rg-test",
                     )
@@ -153,7 +156,7 @@ az() { printf '%s' "$Result"; return "$AzureStatus"; }
                 ("dns", f"API_OK:{marker}", "0", "0", "19", False),
             ):
                 with self.subTest(mode=mode, message=message, guard=guard, make=make, azure=azure):
-                    result = self.run_bash(
+                    result = self.run_shell(
                         mocks + function + f"\nprobe_vm api-remote {mode} 10.91.1.4 api.example\n",
                         Work=folder, Marker=marker, ResourceGroup="rg-test", GuardStatus=guard,
                         MakeStatus=make, AzureStatus=azure, Result=json.dumps({"value": [{"message": message}]}),
@@ -180,7 +183,7 @@ az() {
         ):
             with self.subTest(guard=guard, approval=approval, exists=exists, nodes=nodes):
                 result = subprocess.run(
-                    ["bash", "-c", "set -euo pipefail\n" + mocks + block],
+                    [self.shell, "-c", "set -euo pipefail\n" + mocks + block],
                     env={**os.environ, "GuardStatus": guard, "GroupExistsAfter": exists,
                          "NodeGroupExistsAfter": nodes, "NodeResourceGroup": "node-group",
                          "ResourceGroup": "rg-test"},
@@ -279,7 +282,7 @@ az() {
                 elif problem in ("purpose", "run"):
                     resource["tags"][problem] = "other"
                 with self.subTest(guide=guide, problem=problem):
-                    result = self.run_bash(
+                    result = self.run_shell(
                         mocks + block, Account="invalid-json" if problem == "malformed" else json.dumps(context),
                         Group=json.dumps(resource), AzureStatus="22" if problem == "azure-error" else "0",
                         SubscriptionId="subscription", TenantId="tenant", ResourceGroup="rg-test",
@@ -304,7 +307,7 @@ az() { printf '%s' "$Result"; return "$AzureStatus"; }
                 (f"SERVICE_OK:{marker}", "22", False),
             ):
                 with self.subTest(message=message, status=status):
-                    result = self.run_bash(
+                    result = self.run_shell(
                         mocks + function + "\nprobe_control 192.168.2.10\n",
                         Work=folder, Marker=marker, ResourceGroup="rg-test",
                         Result=json.dumps({"value": [{"message": message}]}), AzureStatus=status,
@@ -325,7 +328,7 @@ kubectl() { printf '%s' "$Pod"; }
             ("original", "192.168.2.10", "Failed", False),
         ):
             with self.subTest(uid=uid, address=address, phase=phase):
-                result = self.run_bash(
+                result = self.run_shell(
                     mocks + function + "\nassert_probe_identity\n",
                     Pod=json.dumps({"metadata": {"uid": uid}, "status": {"podIP": address, "phase": phase}}),
                     PodUid="original", PodIp="192.168.2.10",
@@ -345,7 +348,7 @@ az() {
         for status in ("0", "29"):
             with self.subTest(move_status=status):
                 result = subprocess.run(
-                    ["bash", "-c", "set -euo pipefail\n" + mocks + block],
+                    [self.shell, "-c", "set -euo pipefail\n" + mocks + block],
                     env={**os.environ, "MoveStatus": status, "ResourceGroup": "rg-test",
                          "ServiceVmId": "vm-identity", "ServiceIpConfig": "primary",
                          "RecoverySubnetId": "/synthetic/subnets/recovery", "RecoveryIp": "10.81.0.10",
@@ -379,7 +382,7 @@ az() {
         ):
             with self.subTest(guard=guard, approval=approval, exists=exists):
                 result = subprocess.run(
-                    ["bash", "-c", "set -euo pipefail\n" + mocks + block],
+                    [self.shell, "-c", "set -euo pipefail\n" + mocks + block],
                     env={**os.environ, "GuardStatus": guard, "GroupExistsAfter": exists,
                          "ResourceGroup": "rg-test", "AKS_BASTION_PID": ""},
                     input=approval + "\n", text=True, capture_output=True, timeout=10,
@@ -401,7 +404,7 @@ az() {
         mocks = 'az() { printf "az %s\\n" "$*"; }\nkubectl() { printf "kubectl %s\\n" "$*"; }\n'
         for ready in ("true", "false"):
             with self.subTest(ready=ready):
-                result = self.run_bash(mocks + block, ScaleFromZeroReady=ready,
+                result = self.run_shell(mocks + block, ScaleFromZeroReady=ready,
                                        ResourceGroup="rg-test", ClusterName="aks-test")
                 self.assertEqual(result.returncode, 0, result.stderr)
                 if ready == "true":
@@ -432,7 +435,7 @@ kubectl() { printf 'kubectl %s\\n' "$*"; }
         ]
         for pools, disable, scale in cases:
             with self.subTest(pools=pools):
-                result = self.run_bash(mocks + block, PoolJson=json.dumps(pools),
+                result = self.run_shell(mocks + block, PoolJson=json.dumps(pools),
                                        ResourceGroup="rg-test", ClusterName="aks-test")
                 self.assertEqual(result.returncode, 0, result.stderr)
                 self.assertEqual("--disable-cluster-autoscaler" in result.stdout, disable)
@@ -440,7 +443,7 @@ kubectl() { printf 'kubectl %s\\n' "$*"; }
                 self.assertIn("az resource list", result.stdout)
         for pools in ('[{"name":"cvm"},{"name":"cvm"}]', "not-json", "", "null", "{}"):
             with self.subTest(invalid=pools):
-                result = self.run_bash(mocks + block, PoolJson=pools,
+                result = self.run_shell(mocks + block, PoolJson=pools,
                                        ResourceGroup="rg-test", ClusterName="aks-test")
                 self.assertNotEqual(result.returncode, 0)
                 self.assertNotIn("nodepool scale", result.stdout)
@@ -475,7 +478,7 @@ curl() {
                     with tempfile.TemporaryDirectory() as folder:
                         calls = pathlib.Path(folder) / "calls"
                         auth = pathlib.Path(folder) / "auth"
-                        result = self.run_bash(
+                        result = self.run_shell(
                             mocks + block, Calls=str(calls), AuthFile=str(auth),
                             EncodedUser=base64.b64encode(b"synthetic-user").decode(),
                             EncodedPassword=base64.b64encode(b"synthetic-password").decode(),
@@ -507,7 +510,7 @@ curl() {
 
     def test_baseline_cleanup_waits_only_for_remaining_pods(self):
         block = bash_block("25-rabbitmq-container-storage.md",
-                           'mapfile -t BaselinePvcs < "$Work/baseline-pvcs.txt"')
+                           'BaselinePvcs=()')
         mocks = """
 az() { printf 'node-rg\\n'; }
 kubectl() {
@@ -517,16 +520,21 @@ kubectl() {
 }
 """
         with tempfile.TemporaryDirectory() as folder:
-            (pathlib.Path(folder) / "baseline-pvcs.txt").write_text("claim-0\nclaim-1\nclaim-2\n")
+            (pathlib.Path(folder) / "baseline-pvcs.txt").write_text("claim-0\nclaim-1\nclaim-2")
             for pods in ("", "pod/rabbit-disk-server-0\npod/rabbit-disk-server-1\n"):
                 with self.subTest(pods=pods):
-                    result = self.run_bash(mocks + block, Work=folder, RemainingPods=pods,
+                    result = self.run_shell(mocks + block, Work=folder, RemainingPods=pods,
                                            ResourceGroup="rg-test", ClusterName="aks-test")
                     self.assertEqual(result.returncode, 0, result.stderr)
                     self.assertEqual("kubectl wait" in result.stdout, bool(pods))
                     for number in range(3):
                         self.assertIn(f"delete pvc claim-{number}", result.stdout)
                     self.assertEqual(result.stdout.count("--ignore-not-found"), 4)
+
+
+@unittest.skipUnless(shutil.which("zsh"), "Zsh is not installed")
+class ZshOptionalLabsTests(OptionalLabsTests):
+    shell = "zsh"
 
 
 if __name__ == "__main__":

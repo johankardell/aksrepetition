@@ -48,6 +48,7 @@ if [[ $context != "$cluster_name" ]]; then
 fi
 kubelogin convert-kubeconfig --kubeconfig "$kubeconfig" --login azurecli
 printf 'Opening %s via Bastion on localhost:%s using temporary kubeconfig %s.\n' "$context" "$port" "$kubeconfig"
-printf '%s\n' 'Run the lab commands inside the new subshell. Exit closes the tunnel and removes this kubeconfig.'
+printf '%s\n' 'The Azure CLI opens a Bash subshell, even when this helper is run with Zsh. Exit closes the tunnel and removes this kubeconfig.'
+printf '%s\n' 'For a current-shell Zsh session instead, source ./scripts/activate-aks-bastion.sh.'
 az aks bastion tunnel -g "$resource_group" -n "$cluster_name" \
     --bastion "$bastion_id" --port "$port" --kubeconfig-path "$kubeconfig"

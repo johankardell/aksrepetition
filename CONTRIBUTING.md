@@ -23,7 +23,7 @@ Narrow helper changes first, for example:
 ```bash
 python3 -m unittest discover -s tests -k test_acr_token_uses_stdin_and_checks_hostname -v
 kubectl kustomize k8s/base >/dev/null
-for script in scripts/*.sh ops/*.sh advanced/*.sh; do bash -n "$script"; zsh -n "$script"; done
+for script in scripts/*.sh ops/*.sh advanced/*.sh infra/*.sh; do bash -n "$script"; zsh -n "$script"; done
 for template in infra/*.bicep ops/*.bicep advanced/*.bicep; do
   az bicep build --file "$template" --stdout >/dev/null
 done
@@ -69,11 +69,19 @@ Use existing helpers and kebab-case options. Normal reviewed delivery lives in
 Guard expected failures and verify the correct denial, not just any nonzero status. Restore
 injected fields explicitly and report recovery errors.
 
+Write host-side command blocks for both Bash 5+ and Zsh 5.9+. Prefer separate `printf`/`read`
+prompts, quoted array iteration, `while IFS= read -r` for lines, and JSON selection instead of
+shell-indexed API arrays. Do not use Bash's `read -p`, `mapfile`, `BASH_REMATCH` or `${name,,}`
+in shared blocks, or assign Zsh's special `status`/`path` parameters. If a facility truly
+requires Bash (such as `/dev/tcp`), label it and use an explicit `bash -c` child without losing
+the caller's session state. Keep workflow and remote/container interpreter selections explicit.
+
 ## Review evidence
 
 Include purpose, affected stages/owners, offline commands/results and known live limitations
 in the PR. Add focused tests for new/fixed behavior and update link/contract checks when changing
-navigation. The documentation tests parse Bash/Python examples and verify local links; they
+navigation. The documentation tests parse Bash/Zsh/Python examples, run mocked command gates
+under both shells, and verify local links; they
 do not establish Azure service support or end-to-end recovery.
 
 Update `docs/operations.md#tooling-and-support`, affected lab support notes and executable pins

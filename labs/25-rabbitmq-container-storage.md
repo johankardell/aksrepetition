@@ -19,7 +19,7 @@ Use the [session, evidence and cost operating contract](../docs/operations.md), 
 
 This lab creates a dedicated resource group and AKS cluster. It does not use or modify the cumulative labs 10-15 and 20-23 environment.
 
-Use a separate Bash session outside any cumulative Bastion session. **The actual `az aks create` below has no `--enable-private-cluster`, custom VNet or Bastion flags: it creates a public API endpoint.** Use an approved workstation with HTTPS reachability and credential-retrieval rights; the workload Services remain private ClusterIP. The isolated working-folder kubeconfig does not reuse your default or cumulative tunnel configuration. This standalone example does not reproduce the foundation's Entra-only/private-API hardening.
+Use a separate Bash or Zsh session outside any cumulative Bastion session, following the [shell setup](../docs/operations.md#bash-and-zsh). **The actual `az aks create` below has no `--enable-private-cluster`, custom VNet or Bastion flags: it creates a public API endpoint.** Use an approved workstation with HTTPS reachability and credential-retrieval rights; the workload Services remain private ClusterIP. The isolated working-folder kubeconfig does not reuse your default or cumulative tunnel configuration. This standalone example does not reproduce the foundation's Entra-only/private-API hardening.
 
 If policy requires a private API, stop before creation. An operator must separately provision/review a private-cluster creation variant and a management host with routing and private DNS to its generated VNet (or a dedicated supported Bastion path). **None of that management connectivity is created by this lab**, and the cumulative tunnel is not a route to this new cluster. Do not simply add a private flag and assume `get-credentials` makes the API reachable.
 
@@ -96,7 +96,8 @@ az aks get-versions --location "$Location" -o table
 az vm list-usage --location "$Location" -o table
 az vm list-skus --location "$Location" --size "$StorageVmSize" --all \
   --query "[].{name:name,zones:locationInfo[0].zones,capabilities:capabilities,restrictions:restrictions}" -o json
-read -r -p 'Exact supported Kubernetes version from get-versions: ' KubernetesVersion
+printf '%s' 'Exact supported Kubernetes version from get-versions: ' >&2
+read -r KubernetesVersion
 [[ "$KubernetesVersion" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] ||
   { printf 'Supply an exact supported Kubernetes version.\n' >&2; exit 1; }
 GroupExists=$(az group exists --name "$ResourceGroup")
@@ -312,12 +313,18 @@ unset RabbitUser RabbitPassword RabbitAuth
 Delete the custom resource, wait for its pods to disappear, and inspect PVC/PV cleanup:
 
 ```bash
-mapfile -t BaselinePvcs < "$Work/baseline-pvcs.txt"
+BaselinePvcs=()
+while IFS= read -r Claim || [[ -n "$Claim" ]]; do
+  BaselinePvcs+=("$Claim")
+done < "$Work/baseline-pvcs.txt"
 NodeResourceGroup=$(az aks show -g "$ResourceGroup" -n "$ClusterName" --query nodeResourceGroup -o tsv)
 kubectl delete rabbitmqcluster rabbit-disk -n rabbitmq --ignore-not-found --wait=true --timeout=300s
 BaselinePods=$(kubectl get pod -n rabbitmq -l app.kubernetes.io/name=rabbit-disk -o name)
 if [[ -n "$BaselinePods" ]]; then
-  mapfile -t BaselinePodNames <<< "$BaselinePods"
+  BaselinePodNames=()
+  while IFS= read -r PodName; do
+    BaselinePodNames+=("$PodName")
+  done <<< "$BaselinePods"
   kubectl wait -n rabbitmq "${BaselinePodNames[@]}" --for=delete --timeout=300s
 fi
 for Claim in "${BaselinePvcs[@]}"; do
@@ -604,11 +611,13 @@ az resource list --resource-group "$ResourceGroup" -o table
 Review the inventory. Only after confirming that the group is the dedicated disposable lab boundary:
 
 ```bash
-read -r -p "Type $ResourceGroup to confirm the disposable resource-group boundary: " ConfirmGroup
+printf '%s' "Type $ResourceGroup to confirm the disposable resource-group boundary: " >&2
+read -r ConfirmGroup
 [[ "$ConfirmGroup" == "$ResourceGroup" ]] || { printf 'Deletion not confirmed.\n' >&2; exit 1; }
 az group delete --name "$ResourceGroup"
 # Preserve evidence outside this disposable folder before confirming its removal.
-read -r -p "Type $Work to confirm local manifest/evidence removal: " ConfirmWork
+printf '%s' "Type $Work to confirm local manifest/evidence removal: " >&2
+read -r ConfirmWork
 [[ "$ConfirmWork" == "$Work" && -d "$Work" && "$Work" == "${TMPDIR:-/tmp}/aks-rabbitmq-storage-lab."* ]] ||
   { printf 'Local cleanup not confirmed or path is not the lab folder.\n' >&2; exit 1; }
 rm -r -- "$Work"

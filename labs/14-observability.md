@@ -21,7 +21,7 @@ All application-source changes use the [reviewed Git changes contract](../docs/o
 
 **Prerequisites/re-entry.** Complete Lab 13 with `orders` and `orders-test` Flux Kustomizations Ready. Run Bash at the repository root on a Linux host with private management connectivity. Use `set -euo pipefail` in each terminal. Install Azure CLI, kubectl, kubelogin, Flux CLI, Git, GitHub CLI, `jq`, `curl` (supporting `--fail-with-body`), `python3`, and `openssl`. Re-read local configuration and the monitoring deployment outputs when returning. The platform operator needs AKS configuration/diagnostic permissions and role-assignment rights; the observer needs Monitoring Reader, Log Analytics Reader and Grafana Viewer at their respective resources. Deploying a Grafana resource does not by itself give dashboard access.
 
-Solutions continue in the same Bash terminal unless stated otherwise. `source ./scripts/use-lab.sh` sets `Lab` and `Outputs` to JSON strings and `Root` to the absolute repository root; `lab_value KEY` and `output_value KEY` read required values with `jq -er`. On re-entry, also reload `Monitor` with the deployment-output command in directive 2. Do not enable shell tracing (`set -x`) while handling telemetry connection strings or tokens.
+Solutions continue in the same Bash or Zsh terminal unless stated otherwise. `source ./scripts/use-lab.sh` sets `Lab` and `Outputs` to JSON strings and `Root` to the absolute repository root; `lab_value KEY` and `output_value KEY` read required values with `jq -er`. On re-entry, also reload `Monitor` with the deployment-output command in directive 2. Do not enable shell tracing (`set -x`) while handling telemetry connection strings or tokens.
 
 For a Lab 12 private CA, set both `SSL_CERT_FILE` and `CURL_CA_BUNDLE` to the same absolute approved CA-bundle path in every management/consumer terminal. This preserves certificate verification for the Python helpers and direct `curl` commands without modifying system trust. Never use `curl --insecure` to bypass trust failures.
 
@@ -85,7 +85,8 @@ Compare returned locations with `$(lab_value Location)` and the existing Log Ana
 <summary>Solution</summary>
 
 ```bash
-read -r -p 'Approved recipient for synthetic lab alerts: ' AlertEmail
+printf '%s' 'Approved recipient for synthetic lab alerts: ' >&2
+read -r AlertEmail
 az deployment group create -g "$(lab_value ResourceGroup)" -n monitoring \
   --template-file ./ops/monitoring.bicep \
   --parameters prefix="$(lab_value Prefix)" location="$(lab_value Location)" clusterName="$(lab_value ClusterName)" \
@@ -250,7 +251,8 @@ With directive 4's port-forward still running, capture a five-minute local inter
 bash ./ops/invoke-order-load.sh --base-uri http://127.0.0.1:8081 --operation Browse \
   --count 2000 --concurrency 1 --duration-seconds 300 --delay-milliseconds 200 \
   --output-path .artifacts/slo-local.json
-read -r -p 'Trusted HTTPS application URL from lab 12: ' UserUri
+printf '%s' 'Trusted HTTPS application URL from lab 12: ' >&2
+read -r UserUri
 UserUri=${UserUri%/}
 [[ "$UserUri" == https://* ]] || { printf '%s\n' 'Use the trusted HTTPS application URL.' >&2; exit 1; }
 bash ./ops/invoke-order-load.sh --base-uri "$UserUri" --operation Browse \
@@ -289,7 +291,8 @@ kubectl -n orders exec "$ApiPod" -c api -- python -c \
 ```
 
 ```bash
-read -r -p 'Trusted HTTPS application URL from lab 12: ' UserUri
+printf '%s' 'Trusted HTTPS application URL from lab 12: ' >&2
+read -r UserUri
 UserUri=${UserUri%/}
 [[ "$UserUri" == https://* ]] || { printf '%s\n' 'Use the trusted HTTPS application URL.' >&2; exit 1; }
 bash ./ops/invoke-order-load.sh --base-uri "$UserUri" --operation Browse --count 600 \

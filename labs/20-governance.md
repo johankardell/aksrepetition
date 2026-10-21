@@ -71,8 +71,8 @@ Persist the platform-owned reconciliation in the existing bootstrap path, and pr
 
 ```bash
 Version=$(az aks show -g "$(lab_value ResourceGroup)" -n "$(lab_value ClusterName)" --query kubernetesVersion -o tsv)
-[[ "$Version" =~ ^([0-9]+)[.]([0-9]+)[.] ]] || { printf '%s\n' 'Unexpected Kubernetes version.' >&2; exit 1; }
-PsaVersion="v${BASH_REMATCH[1]}.${BASH_REMATCH[2]}"
+[[ "$Version" =~ ^[0-9]+[.][0-9]+[.][0-9]+$ ]] || { printf '%s\n' 'Unexpected Kubernetes version.' >&2; exit 1; }
+PsaVersion="v${Version%.*}"
 python3 - "$PsaVersion" <<'PY'
 from pathlib import Path
 import re
@@ -133,7 +133,8 @@ Use existing Entra group object IDs for real customer access; do not create user
 <summary>Solution</summary>
 
 ```bash
-read -r -p 'Existing team A Entra group object ID: ' TeamAGroupObjectId
+printf '%s' 'Existing team A Entra group object ID: ' >&2
+read -r TeamAGroupObjectId
 [[ "$TeamAGroupObjectId" =~ ^[[:xdigit:]]{8}-[[:xdigit:]]{4}-[[:xdigit:]]{4}-[[:xdigit:]]{4}-[[:xdigit:]]{12}$ ]] || {
     printf '%s\n' 'Expected an Entra group object GUID.' >&2; exit 1;
 }
@@ -154,7 +155,8 @@ set -euo pipefail
 settings=$(jq -e . ./local.settings.json)
 az login --tenant "$(jq -er .TenantId <<< "$settings")"
 az account set --subscription "$(jq -er .SubscriptionId <<< "$settings")"
-read -r -p 'Platform-provided Bastion ARM ID: ' BastionId
+printf '%s' 'Platform-provided Bastion ARM ID: ' >&2
+read -r BastionId
 az aks bastion tunnel -g "$(jq -er .ResourceGroup <<< "$settings")" \
   -n "$(jq -er '.Prefix + "-aks"' <<< "$settings")" --bastion "$BastionId" --port 8445
 ```

@@ -72,12 +72,12 @@ The subshell below confines its exit trap to the exercise. It restores the selec
       -p '{"spec":{"template":{"spec":{"nodeSelector":{"agentpool":"apps"}}}}}' &&
       kubectl rollout status deployment/order-api -n orders --timeout=300s
   }
-  trap 'status=$?; trap - EXIT
+  trap 'ExerciseStatus=$?; trap - EXIT
     if ! restore_selector; then
       printf "%s\n" "Recovery failed: restore agentpool=apps and verify rollout before continuing." >&2
       exit 1
     fi
-    exit "$status"' EXIT
+    exit "$ExerciseStatus"' EXIT
   kubectl patch deployment order-api -n orders --type merge \
     -p '{"spec":{"template":{"spec":{"nodeSelector":{"agentpool":"missing"}}}}}'
   Status=0
